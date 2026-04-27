@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Orodha — Paediatric Surgery Theatre Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --font: 'Plus Jakarta Sans', system-ui, sans-serif;
+      --green-deep:         oklch(28% 0.09 155);
+      --green-mid:          oklch(38% 0.11 155);
+      --green-accent:       oklch(50% 0.14 155);
+      --green-light:        oklch(95% 0.04 155);
+      --bg:                 oklch(98.5% 0.004 90);
+      --surface:            white;
+      --text:               oklch(20% 0.03 155);
+      --muted:              oklch(56% 0.03 155);
+      --border:             oklch(91% 0.01 155);
+      --sidebar-bg:         var(--green-deep);
+      --sidebar-border:     oklch(35% 0.07 155);
+      --sidebar-muted:      oklch(72% 0.06 155);
+      --sidebar-hover:      oklch(33% 0.08 155);
+      --sidebar-active-bg:  oklch(50% 0.14 155);
+    }
+    html, body { height: 100%; overflow: hidden; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+    #root { height: 100%; }
+    button, input, select, textarea { font-family: var(--font); }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: oklch(85% 0.02 155); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: oklch(75% 0.03 155); }
+
+    @keyframes fadeIn   { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+    @keyframes slideUp  { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+    @media print {
+      body * { visibility: hidden; }
+      #print-area, #print-area * { visibility: visible; }
+      #print-area { position: fixed; top: 0; left: 0; width: 100%; }
+    }
+
+    /* Mobile: body can scroll on mobile screens */
+    @media (max-width: 767px) {
+      html, body { overflow: auto; height: 100dvh; }
+      #root { height: 100dvh; }
+    }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script src="orodha-data.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="orodha-modals.jsx"></script>
+  <script type="text/babel" src="orodha-sidebar.jsx"></script>
+  <script type="text/babel" src="orodha-calendar.jsx"></script>
+  <script type="text/babel" src="orodha-forms.jsx"></script>
+  <script type="text/babel" src="orodha-lists.jsx"></script>
+  <script type="text/babel" src="orodha-app.jsx"></script>
+</body>
+</html>
