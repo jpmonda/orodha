@@ -1082,16 +1082,16 @@ function CalendarScreen({
         <div className="flex min-h-0">
           <section className="min-w-0 flex-1">
             <div className="overflow-x-auto px-7 py-6">
-              <div className="min-w-[1000px] space-y-2">
-                <div className="grid grid-cols-[98px_repeat(31,minmax(0,1fr))] gap-1 pr-1 text-center text-[0.82rem] font-medium text-[var(--muted)]">
+              <div className="min-w-[952px] space-y-1.5">
+                <div className="grid grid-cols-[88px_repeat(31,minmax(0,1fr))] gap-[0.2rem] pr-1 text-center text-[0.74rem] font-medium text-[var(--muted)]">
                   <div />
                   {Array.from({ length: 31 }, (_, index) => <div key={index}>{index + 1}</div>)}
                 </div>
                 {months.map((month) => {
                   const days = getDaysInMonth(month);
                   return (
-                    <div key={month.toISOString()} className="grid grid-cols-[98px_repeat(31,minmax(0,1fr))] items-center gap-1">
-                      <div className="text-[1.02rem] font-semibold">{format(month, "MMMM")}</div>
+                    <div key={month.toISOString()} className="grid grid-cols-[88px_repeat(31,minmax(0,1fr))] items-center gap-[0.2rem]">
+                      <div className="text-[0.96rem] font-semibold">{format(month, "MMMM")}</div>
                       {Array.from({ length: 31 }, (_, index) => {
                         const day = index + 1;
                         if (day > days) return <div key={day} className="aspect-square w-full" />;
