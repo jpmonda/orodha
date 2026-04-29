@@ -2,7 +2,8 @@ import { differenceInMonths, format, parseISO } from "date-fns";
 import type { Booking, EnrichedBooking, OrodhaData, PreopAssessment, SurgicalCase, TheatreSession } from "./types";
 
 export function createId(prefix: string) {
-  return `${prefix}-${crypto.randomUUID()}`;
+  void prefix;
+  return crypto.randomUUID();
 }
 
 export function todayIso() {

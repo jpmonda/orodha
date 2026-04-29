@@ -213,10 +213,16 @@ textarea {
     inset: 0 auto auto 0;
     width: 100%;
     border: 0 !important;
+    border-radius: 0 !important;
     box-shadow: none !important;
   }
 
   .print-area {
     padding: 0 !important;
+  }
+
+  .print-case-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

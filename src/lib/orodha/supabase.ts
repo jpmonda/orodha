@@ -104,10 +104,10 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
   } as OrodhaData;
 }
 
-export async function upsertRow(table: string, payload: Record<string, unknown>) {
+export async function upsertRow(table: string, payload: Record<string, unknown>, options?: { onConflict?: string }) {
   const supabase = getSupabaseBrowserClient();
   if (!supabase) return null;
-  const { data, error } = await supabase.from(table).upsert(payload as never).select().single();
+  const { data, error } = await supabase.from(table).upsert(payload as never, options).select().single();
   if (error) throw error;
   return data;
 }

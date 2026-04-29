@@ -7,12 +7,14 @@ import {
   CalendarDays,
   Check,
   Clipboard,
+  Database,
   FileText,
   Lock,
   LogOut,
   Plus,
   Printer,
   Search,
+  Shield,
   UserCog,
   UsersRound,
   X,
@@ -20,7 +22,7 @@ import {
 import { eachMonthOfInterval, endOfYear, format, getDaysInMonth, parseISO, startOfYear } from "date-fns";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { demoData } from "@/lib/orodha/seed";
-import { fetchCurrentProfile, fetchOrodhaData, fetchProfiles, getCurrentSession, isSupabaseConfigured, signInWithPassword, signOutSupabase, upsertRow } from "@/lib/orodha/supabase";
+import { deleteRow, fetchCurrentProfile, fetchOrodhaData, fetchProfiles, getCurrentSession, isSupabaseConfigured, signInWithPassword, signOutSupabase, upsertRow } from "@/lib/orodha/supabase";
 import type {
   Booking,
   BookingStatus,
@@ -57,10 +59,22 @@ type AppUser = {
   email?: string | null;
 };
 
-const storageKey = "orodha-demo-data-v3";
+const storageKey = "orodha-demo-data-v4";
 const demoAuthKey = "orodha-demo-auth-v1";
 const demoProfilesKey = "orodha-demo-profiles-v1";
-const today = "2026-04-26";
+
+function todayInNairobi() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+const today = todayInNairobi();
 const demoAccounts: { id: string; role: DemoRole; name: string; email: string }[] = [
   { id: "demo-admin", role: "Admin", name: "Dr. K. Mwangi", email: "admin@orodha.demo" },
   { id: "demo-surgeon", role: "Surgeon", name: "Dr. A. Oduya", email: "surgeon@orodha.demo" },
@@ -72,7 +86,7 @@ const navItems: { key: MainView; label: string; icon: ReactNode }[] = [
   { key: "patients", label: "Patients", icon: <UsersRound /> },
   { key: "lists", label: "Specialty Lists", icon: <Clipboard /> },
   { key: "daily", label: "Theatre List", icon: <Printer /> },
-  { key: "users", label: "Users", icon: <UserCog /> },
+  { key: "users", label: "Admin", icon: <UserCog /> },
   { key: "audit", label: "Audit Log", icon: <FileText /> },
 ];
 
@@ -250,6 +264,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
   const [profiles, setProfiles] = useState<Profile[]>(demoProfiles);
   const [source, setSource] = useState<"demo" | "supabase">(appUser.source);
   const [notice, setNotice] = useState("");
+  const [seedingDemo, setSeedingDemo] = useState(false);
   const [view, setView] = useState<ViewKey>("calendar");
   const [previousView, setPreviousView] = useState<ViewKey>("calendar");
   const [query, setQuery] = useState("");
@@ -308,21 +323,55 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
     .filter((booking) => booking.session.session_date === selectedDate)
     .sort((a, b) => a.slot - b.slot);
   const selectedPatient = selectedPatientId ? data.patients.find((patient) => patient.id === selectedPatientId) || null : null;
+  const isWorkspaceEmpty = source === "supabase" && data.patients.length === 0 && data.bookings.length === 0 && data.theatre_sessions.length === 0;
+  const selectedDateIsPast = selectedDate ? isPastTheatreDate(selectedDate) : false;
 
-  async function upsertCollection<K extends keyof OrodhaData>(key: K, table: string, row: OrodhaData[K][number]) {
+  function describeSupabaseError(error: unknown) {
+    return describeError(error);
+  }
+
+  function nextSupabaseId() {
+    return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  async function upsertCollection<K extends keyof OrodhaData>(
+    key: K,
+    table: string,
+    row: OrodhaData[K][number],
+    options?: { onConflict?: string },
+  ) {
     setData((current) => ({
       ...current,
       [key]: replaceById(current[key] as { id: string }[], row as { id: string }),
     }));
-    if (source === "supabase") await upsertRow(table, row as unknown as Record<string, unknown>);
+    if (source === "supabase") {
+      const saved = await upsertRow(table, row as unknown as Record<string, unknown>, options);
+      if (saved && typeof saved === "object" && "id" in saved) {
+        setData((current) => ({
+          ...current,
+          [key]: replaceById(current[key] as { id: string }[], saved as { id: string }),
+        }));
+      }
+    }
   }
 
   async function saveBooking(booking: Booking) {
-    const surgicalCase = data.surgical_cases.find((item) => item.id === booking.case_id);
-    if (surgicalCase) {
-      await upsertCollection("surgical_cases", "surgical_cases", applyCaseStatusFromBooking(booking, surgicalCase));
+    const previousCases = data.surgical_cases;
+    const previousBookings = data.bookings;
+    try {
+      const surgicalCase = data.surgical_cases.find((item) => item.id === booking.case_id);
+      if (surgicalCase) {
+        await upsertCollection("surgical_cases", "surgical_cases", applyCaseStatusFromBooking(booking, surgicalCase));
+      }
+      await upsertCollection("bookings", "bookings", booking);
+    } catch (error) {
+      setData((current) => ({
+        ...current,
+        surgical_cases: previousCases,
+        bookings: previousBookings,
+      }));
+      throw new Error(describeSupabaseError(error));
     }
-    await upsertCollection("bookings", "bookings", booking);
   }
 
   async function saveProfile(profile: Profile) {
@@ -335,6 +384,188 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
         await onSignOut();
         return;
       }
+    }
+  }
+
+  async function clearClinicalData() {
+    const confirmed = window.confirm(
+      "Clear all patients, surgical cases, pre-op assessments, bookings, notes, and theatre sessions? Users, roles, specialties, procedures, and theatres will be kept.",
+    );
+    if (!confirmed) return;
+
+    setNotice("Clearing clinical demo data...");
+    try {
+      const current = source === "supabase" ? (await fetchOrodhaData()) || data : data;
+      const deletePlan: [keyof OrodhaData, string][] = [
+        ["case_notes", "case_notes"],
+        ["bookings", "bookings"],
+        ["preop_assessments", "preop_assessments"],
+        ["surgical_cases", "surgical_cases"],
+        ["theatre_sessions", "theatre_sessions"],
+        ["patients", "patients"],
+      ];
+
+      if (source === "supabase") {
+        for (const [key, table] of deletePlan) {
+          for (const row of current[key] as { id: string }[]) {
+            await deleteRow(table, row.id);
+          }
+        }
+      }
+
+      setData((previous) => ({
+        ...previous,
+        patients: [],
+        surgical_cases: [],
+        preop_assessments: [],
+        bookings: [],
+        case_notes: [],
+        theatre_sessions: [],
+      }));
+      setSelectedDate("2026-04-29");
+      setSelectedPatientId(null);
+      setNotice("Clinical data cleared. Reference data and user access were kept.");
+    } catch (error) {
+      setNotice(`Could not clear clinical data: ${describeSupabaseError(error)}`);
+    }
+  }
+
+  async function seedDemoWorkspace() {
+    if (source !== "supabase" || seedingDemo) return;
+    setSeedingDemo(true);
+    setNotice("Loading demo data into your Supabase workspace...");
+    try {
+      const current = (await fetchOrodhaData()) || data;
+      const specialtyIdMap = new Map<string, string>();
+      const theatreIdMap = new Map<string, string>();
+      const procedureIdMap = new Map<string, string>();
+      const patientIdMap = new Map<string, string>();
+      const sessionIdMap = new Map<string, string>();
+      const caseIdMap = new Map<string, string>();
+
+      const specialtiesByName = new Map(current.specialties.map((item) => [item.name.toLowerCase(), item]));
+      for (const row of demoData.specialties) {
+        const existing = specialtiesByName.get(row.name.toLowerCase());
+        if (existing) {
+          specialtyIdMap.set(row.id, existing.id);
+          await upsertRow("specialties", { ...row, id: existing.id });
+        } else {
+          const payload = { ...row, id: nextSupabaseId() };
+          const saved = await upsertRow("specialties", payload as unknown as Record<string, unknown>);
+          const savedId = ((saved as { id?: string } | null)?.id || payload.id) as string;
+          specialtyIdMap.set(row.id, savedId);
+          specialtiesByName.set(row.name.toLowerCase(), { ...row, id: savedId });
+        }
+      }
+
+      const theatresByName = new Map(current.theatres.map((item) => [item.name.toLowerCase(), item]));
+      for (const row of demoData.theatres) {
+        const existing = theatresByName.get(row.name.toLowerCase());
+        if (existing) {
+          theatreIdMap.set(row.id, existing.id);
+          await upsertRow("theatres", { ...row, id: existing.id });
+        } else {
+          const payload = { ...row, id: nextSupabaseId() };
+          const saved = await upsertRow("theatres", payload as unknown as Record<string, unknown>);
+          const savedId = ((saved as { id?: string } | null)?.id || payload.id) as string;
+          theatreIdMap.set(row.id, savedId);
+          theatresByName.set(row.name.toLowerCase(), { ...row, id: savedId });
+        }
+      }
+
+      const proceduresByKey = new Map(current.procedures.map((item) => [`${item.specialty_id || "none"}::${item.name.toLowerCase()}`, item]));
+      for (const row of demoData.procedures) {
+        const specialty_id = row.specialty_id ? specialtyIdMap.get(row.specialty_id) || row.specialty_id : null;
+        const key = `${specialty_id || "none"}::${row.name.toLowerCase()}`;
+        const existing = proceduresByKey.get(key);
+        if (existing) {
+          procedureIdMap.set(row.id, existing.id);
+          await upsertRow("procedures", { ...row, id: existing.id, specialty_id });
+        } else {
+          const payload = { ...row, id: nextSupabaseId(), specialty_id };
+          const saved = await upsertRow("procedures", payload);
+          const savedId = ((saved as { id?: string } | null)?.id || payload.id) as string;
+          procedureIdMap.set(row.id, savedId);
+          proceduresByKey.set(key, { ...row, id: savedId, specialty_id });
+        }
+      }
+
+      const patientsByNumber = new Map(current.patients.map((item) => [item.hospital_number, item]));
+      for (const row of demoData.patients) {
+        const existing = patientsByNumber.get(row.hospital_number);
+        const payload = { ...row, id: existing?.id || nextSupabaseId() };
+        const saved = await upsertRow("patients", payload);
+        const savedId = ((saved as { id?: string } | null)?.id || payload.id) as string;
+        patientIdMap.set(row.id, savedId);
+        patientsByNumber.set(row.hospital_number, { ...row, id: savedId });
+      }
+
+      const sessionsByKey = new Map(
+        current.theatre_sessions.map((item) => [`${item.theatre_id}::${item.session_date}::${item.session_name.toLowerCase()}`, item]),
+      );
+      for (const row of demoData.theatre_sessions) {
+        const theatre_id = theatreIdMap.get(row.theatre_id) || row.theatre_id;
+        const key = `${theatre_id}::${row.session_date}::${row.session_name.toLowerCase()}`;
+        const existing = sessionsByKey.get(key);
+        const payload = { ...row, id: existing?.id || nextSupabaseId(), theatre_id };
+        const saved = await upsertRow("theatre_sessions", payload);
+        const savedId = ((saved as { id?: string } | null)?.id || payload.id) as string;
+        sessionIdMap.set(row.id, savedId);
+        sessionsByKey.set(key, { ...row, id: savedId, theatre_id });
+      }
+
+      const existingCases = current.surgical_cases;
+      for (const row of demoData.surgical_cases) {
+        const payload = {
+          ...row,
+          id: nextSupabaseId(),
+          patient_id: patientIdMap.get(row.patient_id) || row.patient_id,
+          specialty_id: row.specialty_id ? specialtyIdMap.get(row.specialty_id) || row.specialty_id : null,
+          procedure_id: row.procedure_id ? procedureIdMap.get(row.procedure_id) || row.procedure_id : null,
+        };
+        const existing = existingCases.find(
+          (item) =>
+            item.patient_id === payload.patient_id &&
+            item.procedure_name.toLowerCase() === payload.procedure_name.toLowerCase() &&
+            item.created_at === row.created_at,
+        );
+        if (existing) payload.id = existing.id;
+        const saved = await upsertRow("surgical_cases", payload);
+        caseIdMap.set(row.id, ((saved as { id?: string } | null)?.id || payload.id) as string);
+      }
+
+      const afterCases = (await fetchOrodhaData()) || current;
+      const preopByCaseId = new Map(afterCases.preop_assessments.map((item) => [item.case_id, item]));
+      for (const row of demoData.preop_assessments) {
+        const case_id = caseIdMap.get(row.case_id) || row.case_id;
+        const existing = preopByCaseId.get(case_id);
+        const payload = { ...row, id: existing?.id || nextSupabaseId(), case_id };
+        const saved = await upsertRow("preop_assessments", payload);
+        preopByCaseId.set(case_id, { ...row, id: ((saved as { id?: string } | null)?.id || payload.id) as string, case_id });
+      }
+
+      const bookingsBySlot = new Map(afterCases.bookings.map((item) => [`${item.session_id}::${item.slot}`, item]));
+      for (const row of demoData.bookings) {
+        const case_id = caseIdMap.get(row.case_id) || row.case_id;
+        const session_id = sessionIdMap.get(row.session_id) || row.session_id;
+        const existing = bookingsBySlot.get(`${session_id}::${row.slot}`);
+        const payload = { ...row, id: existing?.id || nextSupabaseId(), case_id, session_id };
+        const saved = await upsertRow("bookings", payload);
+        bookingsBySlot.set(`${session_id}::${row.slot}`, { ...row, id: ((saved as { id?: string } | null)?.id || payload.id) as string, case_id, session_id });
+      }
+
+      for (const row of demoData.case_notes) {
+        const payload = { ...row, id: nextSupabaseId(), case_id: caseIdMap.get(row.case_id) || row.case_id };
+        await upsertRow("case_notes", payload);
+      }
+
+      const refreshed = await fetchOrodhaData();
+      if (refreshed) setData(refreshed);
+      setNotice("Demo data loaded into your Supabase workspace.");
+    } catch (error) {
+      setNotice(`Could not load demo data: ${describeSupabaseError(error)}`);
+    } finally {
+      setSeedingDemo(false);
     }
   }
 
@@ -376,6 +607,17 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
         <TopBar appUser={appUser} signOut={onSignOut} />
         <main className="min-h-0 flex-1 overflow-auto">
           {notice && <div className="mx-10 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">{notice}</div>}
+          {isWorkspaceEmpty && isAdmin && (
+            <div className="mx-10 mt-4 flex items-start justify-between gap-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <div>
+                <div className="font-semibold">Your Supabase workspace is empty.</div>
+                <div className="mt-1 text-emerald-800">Load the Orodha starter demo data to populate patients, theatre sessions, bookings, blocked Kenyan holidays, and list history.</div>
+              </div>
+              <button className="btn-primary shrink-0 px-4 py-2 disabled:cursor-not-allowed disabled:opacity-60" onClick={seedDemoWorkspace} disabled={seedingDemo}>
+                {seedingDemo ? "Loading demo..." : "Load demo data"}
+              </button>
+            </div>
+          )}
           {contentView === "calendar" && (
             <CalendarScreen
               data={data}
@@ -396,6 +638,9 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
                 if (readOnly) {
                   setNotice(`${appUser.role} access is read-only. Only admins can create bookings.`);
                   return;
+                }
+                if (selectedDateIsPast) {
+                  setNotice("The selected theatre day is in the past. Choose today or a future date in the booking form.");
                 }
                 startNewBooking();
               }}
@@ -441,7 +686,16 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
           )}
           {contentView === "daily" && <TheatreListScreen data={data} bookings={bookings} selectedDate={selectedDate} setSelectedDate={setSelectedDate} />}
           {contentView === "users" && isAdmin && (
-            <UserManagementScreen profiles={profiles} appUser={appUser} source={source} saveProfile={saveProfile} />
+            <UserManagementScreen
+              profiles={profiles}
+              appUser={appUser}
+              source={source}
+              data={data}
+              saveProfile={saveProfile}
+              clearClinicalData={clearClinicalData}
+              seedDemoWorkspace={seedDemoWorkspace}
+              seedingDemo={seedingDemo}
+            />
           )}
           {contentView === "audit" && isAdmin && <AuditLogScreen bookings={bookings} appUser={appUser} />}
           {view === "new-patient" && (
@@ -470,7 +724,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
                 setView("new-patient");
               }}
               saveCase={(surgicalCase) => upsertCollection("surgical_cases", "surgical_cases", surgicalCase)}
-              savePreop={(preop) => upsertCollection("preop_assessments", "preop_assessments", preop)}
+              savePreop={(preop) => upsertCollection("preop_assessments", "preop_assessments", preop, { onConflict: "case_id" })}
               saveSession={(session) => upsertCollection("theatre_sessions", "theatre_sessions", session)}
               saveBooking={saveBooking}
               done={(date) => {
@@ -500,11 +754,18 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
 function LoadingScreen() {
   return (
     <div className="grid min-h-dvh place-items-center bg-[var(--bg)] px-6">
-      <div className="flex items-center gap-4 rounded-3xl border border-[var(--border)] bg-white px-6 py-5 shadow-[var(--shadow-card)]">
-        <Image src="/orodha-logo.png" alt="Orodha logo" width={52} height={52} className="rounded-2xl" />
-        <div>
-          <div className="text-lg font-semibold">Loading Orodha</div>
-          <div className="text-sm text-[var(--muted)]">Preparing your theatre workspace...</div>
+      <div className="rounded-[1.75rem] border border-[var(--border)] bg-white px-6 py-5 shadow-[var(--shadow-card)]">
+        <BrandLockup
+          subtitle="Paediatric Theatre Management"
+          size={56}
+          gapClassName="gap-4"
+          roundedClassName="rounded-[1rem]"
+          titleClassName="text-[1.6rem] font-semibold leading-none tracking-[-0.01em] text-[#111a16]"
+          subtitleClassName="mt-1.5 text-[0.92rem] leading-none text-[var(--muted)]"
+        />
+        <div className="mt-4 border-t border-[var(--border)] pt-4">
+          <div className="text-base font-semibold text-[#111a16]">Preparing your theatre workspace...</div>
+          <div className="mt-1 text-sm text-[var(--muted)]">Loading Orodha</div>
         </div>
       </div>
     </div>
@@ -530,73 +791,121 @@ function LoginScreen({
   error: string;
   demoLogin: (role: DemoRole) => void;
 }) {
+  const loginHighlights = [
+    {
+      title: "Calendar oversight",
+      detail: "View and manage all theatre sessions across sites in one place.",
+      icon: <CalendarDays size={22} />,
+    },
+    {
+      title: "Patient tracking",
+      detail: "Follow each patient from booking through recovery in real time.",
+      icon: <UsersRound size={22} />,
+    },
+    {
+      title: "Theatre list visibility",
+      detail: "Shared operative lists, always in sync between surgery and anaesthesia.",
+      icon: <Printer size={22} />,
+    },
+  ];
+
   return (
-    <div className="grid min-h-dvh bg-[var(--bg)] xl:grid-cols-[1.05fr_0.95fr]">
-      <section className="hidden bg-[var(--green-deep)] px-12 py-12 text-white xl:flex xl:flex-col">
-        <div className="flex items-center gap-4">
-          <Image src="/orodha-logo.png" alt="Orodha logo" width={68} height={68} className="rounded-2xl" />
-          <div>
-            <div className="text-[2rem] font-bold leading-none">Orodha</div>
-            <div className="mt-1 text-base text-[#9cc9aa]">Paediatric Theatre Management</div>
-          </div>
-        </div>
-        <div className="mt-16 max-w-xl">
-          <h1 className="text-5xl font-semibold leading-tight">A calmer way to manage paediatric theatre flow.</h1>
-          <p className="mt-6 text-lg leading-8 text-[#c6e1d0]">
-            Track patients, organise theatre sessions, and keep your daily lists aligned across surgery and anaesthesia teams.
+    <div className="min-h-dvh bg-[var(--bg)] xl:grid xl:min-h-dvh xl:grid-cols-[0.58fr_1.42fr]">
+      <section className="hidden bg-[var(--green-deep)] px-8 py-10 text-white xl:flex xl:flex-col">
+        <BrandLockup
+          subtitle="Paediatric Theatre Management"
+          size={82}
+          gapClassName="gap-5.5"
+          roundedClassName="rounded-[1.15rem]"
+          titleClassName="text-[1.9rem] font-semibold leading-none tracking-[-0.015em]"
+          subtitleClassName="mt-1.5 text-[0.96rem] leading-none text-[#b8d3c4]"
+        />
+        <div className="mt-16 max-w-[390px]">
+          <h1 className="text-[3.1rem] font-medium leading-[1.08] tracking-[-0.03em]">
+            <span className="block">Patients.</span>
+            <span className="mt-2 block">Lists.</span>
+            <span className="mt-2 block">Teams.</span>
+          </h1>
+          <p className="mt-7 max-w-[360px] text-[0.98rem] leading-7 text-[#c3d8cb]">
+            One place for Paediatric theatre bookings.
           </p>
         </div>
         <div className="mt-auto grid gap-4">
-          {["Calendar oversight", "Patient tracking", "Theatre list visibility"].map((item) => (
-            <div key={item} className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-[#dceee4]">{item}</div>
+          {loginHighlights.map((item) => (
+            <div key={item.title} className="rounded-[1.4rem] border border-white/10 bg-white/5 px-5 py-4 text-[#dceee4] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+              <div className="flex items-start gap-3.5">
+                <div className="grid size-12 shrink-0 place-items-center rounded-[0.9rem] bg-white/10 text-[#dfeee4]">
+                  {item.icon}
+                </div>
+                <div>
+                  <div className="text-[0.96rem] font-semibold leading-none text-white">{item.title}</div>
+                  <div className="mt-1.5 text-[0.9rem] leading-7 text-[#b9d1c4]">{item.detail}</div>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
       </section>
-      <section className="flex items-center justify-center px-6 py-10">
-        <div className="w-full max-w-[520px] rounded-[2rem] border border-[var(--border)] bg-white p-8 shadow-[0_20px_60px_rgba(0,0,0,0.08)]">
-          <div className="flex items-center gap-3 xl:hidden">
-            <Image src="/orodha-logo.png" alt="Orodha logo" width={54} height={54} className="rounded-2xl" />
-            <div>
-              <div className="text-[1.55rem] font-bold">Orodha</div>
-              <div className="text-sm text-[var(--muted)]">Paediatric Theatre Management</div>
-            </div>
+      <section className="flex items-center justify-center px-5 py-6 sm:px-8 sm:py-10 xl:bg-white xl:px-12">
+        <div className="w-full max-w-[600px]">
+          <div className="xl:hidden">
+            <BrandLockup
+              subtitle="Paediatric Theatre Management"
+              size={68}
+              gapClassName="gap-4"
+              roundedClassName="rounded-[1rem]"
+              titleClassName="text-[1.62rem] font-semibold leading-none tracking-[-0.01em]"
+              subtitleClassName="mt-1.5 text-[0.92rem] leading-none text-[var(--muted)]"
+            />
           </div>
-          <div className="mt-8">
-            <div className="text-[1.9rem] font-semibold leading-tight">Sign in</div>
-            <p className="mt-2 text-[var(--muted)]">Use your role-based account to access the theatre calendar, patient records, and operative lists.</p>
-          </div>
-
-          {isSupabaseConfigured ? (
-            <form onSubmit={submit} className="mt-8 space-y-5">
+          <div className="mt-8 rounded-[1.75rem] border border-[var(--border)] bg-white p-6 shadow-[var(--shadow-card)] sm:p-7 xl:mt-0 xl:max-w-[500px] xl:px-8 xl:py-8">
+            <div className="text-[3rem] font-semibold leading-none tracking-[-0.03em] text-[#111a16]">Sign in</div>
+            <p className="mt-3 text-[0.96rem] leading-7 text-[var(--muted)]">Welcome back. Sign in to continue.</p>
+          
+            {isSupabaseConfigured ? (
+            <form onSubmit={submit} className="mt-7 space-y-4">
               <Field label="Email address">
-                <input className="input h-11" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@hospital.org" required />
+                <input className="input h-[3rem] rounded-[0.85rem] px-3.5 text-[0.96rem]" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@hospital.org" required />
               </Field>
               <Field label="Password">
-                <input className="input h-11" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" required />
+                <input className="input h-[3rem] rounded-[0.85rem] px-3.5 text-[0.96rem]" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" required />
               </Field>
+              <div className="-mt-1 text-right text-[0.92rem] font-medium text-[var(--green-mid)]">Forgot password?</div>
               {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>}
-              <button className="btn-primary w-full justify-center py-3 text-base disabled:cursor-not-allowed disabled:opacity-60" type="submit" disabled={submitDisabled}>
+              <button className="btn-secondary w-full justify-center rounded-[0.85rem] border-[var(--border)] py-2.5 text-[0.98rem] font-medium text-[#111a16] disabled:cursor-not-allowed disabled:opacity-60" type="submit" disabled={submitDisabled}>
                 {submitDisabled ? "Signing in..." : "Sign in"}
               </button>
+              <div className="rounded-[1rem] border border-[#e5e0d2] bg-[#f5f2e9] px-4 py-4 text-[0.96rem] leading-7 text-[#4f534e]">
+                Access is restricted to verified clinical staff. Contact your theatre coordinator if you need an account.
+              </div>
+              <div className="flex items-center gap-3 text-[0.92rem] text-[var(--muted)]">
+                <Shield size={16} />
+                <span>End-to-end encrypted</span>
+              </div>
             </form>
           ) : (
             <div className="mt-8">
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Supabase isn’t configured yet, so this login page is running in demo mode for now.
+              <div className="rounded-[1rem] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+                Supabase isn&apos;t configured yet, so this login page is running in demo mode for now.
               </div>
-              <div className="mt-6 grid gap-3">
+              <div className="mt-6 grid gap-4">
                 {demoAccounts.map((account) => (
-                  <button key={account.role} className="rounded-2xl border border-[var(--border)] bg-white px-5 py-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50/60" onClick={() => demoLogin(account.role)}>
+                  <button key={account.role} className="rounded-[1rem] border border-[var(--border)] bg-white px-5 py-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50/60" onClick={() => demoLogin(account.role)}>
                     <div className="text-base font-semibold">{account.role}</div>
                     <div className="mt-1 text-sm text-[var(--muted)]">{account.name}</div>
-                    <div className="mt-2 text-sm text-[var(--muted)]">
+                    <div className="mt-2 text-sm leading-7 text-[var(--muted)]">
                       {account.role === "Admin" ? "Full access to theatre scheduling and updates." : "Read-only access to the calendar, patients, and operative lists."}
                     </div>
                   </button>
                 ))}
               </div>
+              <div className="mt-6 flex items-center gap-3 text-[0.95rem] text-[var(--muted)]">
+                <Shield size={18} />
+                <span>Configured demo roles for local workflow testing</span>
+              </div>
             </div>
           )}
+          </div>
         </div>
       </section>
     </div>
@@ -606,15 +915,20 @@ function LoginScreen({
 function ApprovalScreen({ appUser, signOut }: { appUser: AppUser; signOut: () => Promise<void> }) {
   return (
     <div className="grid min-h-dvh place-items-center bg-[var(--bg)] px-6">
-      <div className="w-full max-w-[520px] rounded-[2rem] border border-[var(--border)] bg-white p-8 shadow-[0_20px_60px_rgba(0,0,0,0.08)]">
-        <div className="flex items-center gap-4">
-          <Image src="/orodha-logo.png" alt="Orodha logo" width={56} height={56} className="rounded-2xl" />
-          <div>
-            <div className="text-[1.55rem] font-semibold">Approval pending</div>
-            <div className="text-sm text-[var(--muted)]">{appUser.email || appUser.name}</div>
-          </div>
+      <div className="w-full max-w-[520px] rounded-[1.75rem] border border-[var(--border)] bg-white p-8 shadow-[var(--shadow-card)]">
+        <BrandLockup
+          subtitle="Paediatric Theatre Management"
+          size={60}
+          gapClassName="gap-4"
+          roundedClassName="rounded-[1rem]"
+          titleClassName="text-[1.7rem] font-semibold leading-none tracking-[-0.01em] text-[#111a16]"
+          subtitleClassName="mt-1.5 text-[0.93rem] leading-none text-[var(--muted)]"
+        />
+        <div className="mt-6 border-t border-[var(--border)] pt-6">
+          <div className="text-[1.55rem] font-semibold">Approval pending</div>
+          <div className="mt-1 text-sm text-[var(--muted)]">{appUser.email || appUser.name}</div>
         </div>
-        <p className="mt-6 text-[var(--muted)]">Your account exists, but it still needs to be approved before Orodha can open your clinical workspace.</p>
+        <p className="mt-5 text-[var(--muted)]">Your account exists, but it still needs to be approved before Orodha can open your clinical workspace.</p>
         <button className="btn-secondary mt-8" onClick={signOut}>Sign out</button>
       </div>
     </div>
@@ -624,7 +938,7 @@ function ApprovalScreen({ appUser, signOut }: { appUser: AppUser; signOut: () =>
 function UnsupportedRoleScreen({ appUser, signOut }: { appUser: AppUser; signOut: () => Promise<void> }) {
   return (
     <div className="grid min-h-dvh place-items-center bg-[var(--bg)] px-6">
-      <div className="w-full max-w-[560px] rounded-[2rem] border border-[var(--border)] bg-white p-8 shadow-[0_20px_60px_rgba(0,0,0,0.08)]">
+      <div className="w-full max-w-[560px] rounded-[1.75rem] border border-[var(--border)] bg-white p-8 shadow-[var(--shadow-card)]">
         <div className="text-[1.7rem] font-semibold">Role not configured for this app</div>
         <p className="mt-4 text-[var(--muted)]">
           {appUser.role} accounts are present in the schema, but this version of the interface currently supports Admin, Surgeon, and Anaesthetist access only.
@@ -635,16 +949,45 @@ function UnsupportedRoleScreen({ appUser, signOut }: { appUser: AppUser; signOut
   );
 }
 
+function BrandLockup({
+  subtitle,
+  size,
+  titleClassName,
+  subtitleClassName,
+  gapClassName,
+  roundedClassName,
+}: {
+  subtitle: string;
+  size: number;
+  titleClassName: string;
+  subtitleClassName: string;
+  gapClassName: string;
+  roundedClassName: string;
+}) {
+  return (
+    <div className={clsx("flex items-center", gapClassName)}>
+      <Image src="/orodha-brand-ui.png" alt="Orodha logo" width={size} height={size} className={clsx("shrink-0 object-contain", roundedClassName)} />
+      <div className="flex flex-col justify-center">
+        <div className={titleClassName}>Orodha</div>
+        <div className={subtitleClassName}>{subtitle}</div>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({ activeView, setView, appUser }: { activeView: MainView; setView: (view: MainView) => void; appUser: AppUser }) {
   const visibleItems = appUser.role === "Admin" ? navItems : navItems.filter((item) => item.key !== "audit" && item.key !== "users");
   return (
     <aside className="hidden w-[248px] shrink-0 bg-[var(--green-deep)] text-white xl:flex xl:flex-col">
-      <div className="flex h-[108px] items-center gap-3 border-b border-white/10 px-6">
-        <Image src="/orodha-logo.png" alt="Orodha logo" width={46} height={46} className="rounded-xl" />
-        <div>
-          <div className="text-[1.55rem] font-bold leading-none">Orodha</div>
-          <div className="mt-1 text-sm font-medium text-[#9cc9aa]">Theatre Management</div>
-        </div>
+      <div className="flex h-[110px] items-center border-b border-white/10 px-6">
+        <BrandLockup
+          subtitle="Theatre Management"
+          size={56}
+          gapClassName="gap-4"
+          roundedClassName="rounded-[1.05rem]"
+          titleClassName="text-[1.5rem] font-bold leading-none tracking-[-0.01em]"
+          subtitleClassName="mt-1.5 text-[0.94rem] font-medium leading-none text-[#9cc9aa]"
+        />
       </div>
       <nav className="flex-1 space-y-2 px-3 py-4">
         {visibleItems.map((item) => (
@@ -711,13 +1054,12 @@ function CalendarScreen({
   startNewBooking: () => void;
   saveBooking: (booking: Booking) => Promise<void>;
   readOnly: boolean;
-}) {
-  const months = eachMonthOfInterval({ start: startOfYear(parseISO(today)), end: endOfYear(parseISO(today)) });
-  const sessions = new Map(data.theatre_sessions.map((session) => [session.session_date, session]));
-
-  return (
-    <div className="flex min-h-full">
-      <section className="min-w-0 flex-1">
+  }) {
+    const months = eachMonthOfInterval({ start: startOfYear(parseISO(today)), end: endOfYear(parseISO(today)) });
+    const sessions = new Map(data.theatre_sessions.map((session) => [session.session_date, session]));
+  
+    return (
+      <div className="min-h-full">
         <div className="border-b border-[var(--border)] px-7 py-7">
           <PageHeader
             title="Theatre Calendar"
@@ -737,58 +1079,61 @@ function CalendarScreen({
             }
           />
         </div>
-        <div className="overflow-x-auto px-7 py-6">
-          <div className="min-w-[1000px] space-y-2">
-            <div className="grid grid-cols-[98px_repeat(31,minmax(0,1fr))] gap-1 pr-1 text-center text-[0.95rem] font-medium text-[var(--muted)]">
-              <div />
-              {Array.from({ length: 31 }, (_, index) => <div key={index}>{index + 1}</div>)}
-            </div>
-            {months.map((month) => {
-              const days = getDaysInMonth(month);
-              return (
-                <div key={month.toISOString()} className="grid grid-cols-[98px_repeat(31,minmax(0,1fr))] items-center gap-1">
-                  <div className="text-[1.02rem] font-semibold">{format(month, "MMMM")}</div>
-                  {Array.from({ length: 31 }, (_, index) => {
-                    const day = index + 1;
-                    if (day > days) return <div key={day} className="aspect-square w-full" />;
-                    const dateObject = new Date(2026, month.getMonth(), day);
-                    const date = format(dateObject, "yyyy-MM-dd");
-                    const isWeekend = dateObject.getDay() === 0 || dateObject.getDay() === 6;
-                    const session = sessions.get(date);
-                    const capacity = session ? capacityForSession(data, session) : null;
-                    return (
-                      <button
-                        key={date}
-                        className={clsx("calendar-cell", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
-                        onClick={() => setSelectedDate(date)}
-                        title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : undefined}
-                      >
-                        {session?.is_blocked ? <Lock size={13} /> : capacity?.booked || day}
-                      </button>
-                    );
-                  })}
+        <div className="flex min-h-0">
+          <section className="min-w-0 flex-1">
+            <div className="overflow-x-auto px-7 py-6">
+              <div className="min-w-[1000px] space-y-2">
+                <div className="grid grid-cols-[98px_repeat(31,minmax(0,1fr))] gap-1 pr-1 text-center text-[0.82rem] font-medium text-[var(--muted)]">
+                  <div />
+                  {Array.from({ length: 31 }, (_, index) => <div key={index}>{index + 1}</div>)}
                 </div>
-              );
-            })}
-          </div>
+                {months.map((month) => {
+                  const days = getDaysInMonth(month);
+                  return (
+                    <div key={month.toISOString()} className="grid grid-cols-[98px_repeat(31,minmax(0,1fr))] items-center gap-1">
+                      <div className="text-[1.02rem] font-semibold">{format(month, "MMMM")}</div>
+                      {Array.from({ length: 31 }, (_, index) => {
+                        const day = index + 1;
+                        if (day > days) return <div key={day} className="aspect-square w-full" />;
+                        const dateObject = new Date(2026, month.getMonth(), day);
+                        const date = format(dateObject, "yyyy-MM-dd");
+                        const isWeekend = dateObject.getDay() === 0 || dateObject.getDay() === 6;
+                        const session = sessions.get(date);
+                        const capacity = session ? capacityForSession(data, session) : null;
+                        return (
+                          <button
+                            key={date}
+                            className={clsx("calendar-cell", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
+                            onClick={() => setSelectedDate(date)}
+                            title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : undefined}
+                          >
+                            {session?.is_blocked ? <Lock size={13} /> : capacity?.booked || day}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+          {selectedSession && (
+            <DayPanel
+              data={data}
+              selectedDate={selectedDate}
+              session={selectedSession}
+              bookings={dayBookings}
+              close={closeDayPanel}
+              openBlockDay={openBlockDay}
+              startNewBooking={startNewBooking}
+              saveBooking={saveBooking}
+              readOnly={readOnly}
+            />
+          )}
         </div>
-      </section>
-      {selectedSession && (
-        <DayPanel
-          data={data}
-          selectedDate={selectedDate}
-          session={selectedSession}
-          bookings={dayBookings}
-          close={closeDayPanel}
-          openBlockDay={openBlockDay}
-          startNewBooking={startNewBooking}
-          saveBooking={saveBooking}
-          readOnly={readOnly}
-        />
-      )}
-    </div>
-  );
-}
+      </div>
+    );
+  }
 
 function DayPanel({
   data,
@@ -813,23 +1158,41 @@ function DayPanel({
 }) {
   const sessionCapacity = capacityForSession(data, session);
   const isFull = sessionCapacity.isFull;
+  const isPast = isPastTheatreDate(selectedDate);
+  const activeOccupiedSlots = new Set(bookings.filter(isCapacityBooking).map((booking) => booking.slot));
+  const bookSlotDisabled = isFull || isPast || readOnly || session.is_blocked;
+  const bookSlotTitle = readOnly
+    ? "Only admins can create bookings."
+    : isPast
+      ? "Only today or future dates can have bookings."
+      : session.is_blocked
+        ? "This theatre day is blocked."
+        : isFull
+          ? "All slots are filled for this day."
+          : "Book into an available slot";
   return (
     <aside className="hidden w-[352px] shrink-0 border-l border-[var(--border)] bg-white xl:flex xl:flex-col">
-      <div className="flex items-start justify-between border-b border-[var(--border)] px-5 py-5">
-        <div>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-[var(--border)] px-5 py-5">
+        <div className="min-w-0">
           <div className="text-xs font-bold uppercase tracking-[0.06em] text-[var(--muted)]">{format(parseISO(selectedDate), "EEEE")}</div>
-          <div className="mt-1 text-xl font-bold">{format(parseISO(selectedDate), "d MMMM yyyy")}</div>
+          <div className="mt-1.5 text-[1.48rem] font-bold leading-tight tracking-[-0.02em]">{format(parseISO(selectedDate), "d MMMM yyyy")}</div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-2 pt-0.5">
           <button
-            className="btn-secondary min-h-0 px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+            className="btn-secondary min-h-[38px] rounded-xl px-3 py-1.5 text-[0.92rem] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => openBlockDay(selectedDate, session.block_reason)}
             disabled={readOnly}
             title={readOnly ? "Only admins can block theatre days." : "Block this theatre day"}
           >
-            <Lock size={14} className="text-amber-600" /> Block day
+            <Lock size={13} className="text-amber-600" /> Block day
           </button>
-          <button className="icon-button border-0 bg-transparent" aria-label="Close day panel" onClick={close}><X size={20} /></button>
+          <button
+            className="grid h-[38px] w-[38px] place-items-center rounded-xl border border-[var(--border)] bg-white text-[var(--muted)] transition hover:border-slate-300 hover:text-slate-700"
+            aria-label="Close day panel"
+            onClick={close}
+          >
+            <X size={17} />
+          </button>
         </div>
       </div>
       <div className="scrollbar-soft flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
@@ -838,17 +1201,25 @@ function DayPanel({
           <button
             className="rounded-lg border border-emerald-300 px-3 py-1.5 text-sm font-semibold text-[var(--green-mid)] disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
             onClick={startNewBooking}
-            disabled={isFull || readOnly}
-            title={readOnly ? "Only admins can create bookings." : isFull ? "All slots are filled for this day" : "Book into an available slot"}
+            disabled={bookSlotDisabled}
+            title={bookSlotTitle}
           >
             <Plus size={14} className="inline-block" /> Book slot
           </button>
         </div>
-        {Array.from({ length: session.max_cases }, (_, index) => {
-          const slot = index + 1;
-          const booking = bookings.find((item) => item.slot === slot);
-          return booking ? <TheatreSlot key={slot} booking={booking} saveBooking={saveBooking} readOnly={readOnly} /> : <EmptySlot key={slot} slot={slot} />;
-        })}
+        {isPast && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+            Only today or future dates can have new bookings. This day remains visible for theatre history.
+          </div>
+        )}
+        {bookings.map((booking) => (
+          <TheatreSlot key={booking.id} booking={booking} saveBooking={saveBooking} readOnly={readOnly || isPast} />
+        ))}
+        {!session.is_blocked &&
+          Array.from({ length: session.max_cases }, (_, index) => {
+            const slot = index + 1;
+            return activeOccupiedSlots.has(slot) ? null : <EmptySlot key={`available-${slot}`} slot={slot} />;
+          })}
       </div>
       <div className="border-t border-[var(--border)] p-5">
         <button className="btn-secondary w-full justify-center py-2.5 text-base" onClick={() => window.print()}>Print Theatre List</button>
@@ -860,8 +1231,10 @@ function DayPanel({
 function TheatreSlot({ booking, saveBooking, readOnly }: { booking: EnrichedBooking; saveBooking: (booking: Booking) => Promise<void>; readOnly: boolean }) {
   const done = booking.booking_status === "Done";
   const postponed = booking.booking_status === "Postponed";
+  const cancelled = booking.booking_status === "Cancelled";
+  const editableBookedCase = booking.booking_status === "Booked";
   return (
-    <article className={clsx("rounded-xl border p-4", done ? "border-emerald-200 bg-emerald-50" : postponed ? "border-slate-200 bg-slate-50" : "border-amber-300 bg-amber-50")}>
+    <article className={clsx("rounded-xl border p-4", done ? "border-emerald-200 bg-emerald-50" : postponed ? "border-slate-200 bg-slate-50" : cancelled ? "border-red-200 bg-red-50" : "border-amber-300 bg-amber-50")}>
       <div className="flex justify-between">
         <div className="text-xs font-bold uppercase tracking-[0.06em] text-[var(--muted)]">Slot {booking.slot}</div>
         <StatusBadge status={booking.booking_status} uiPending />
@@ -871,10 +1244,28 @@ function TheatreSlot({ booking, saveBooking, readOnly }: { booking: EnrichedBook
       <div className="mt-2 text-[0.95rem] font-medium leading-snug">{booking.surgicalCase.procedure_name}</div>
       <div className="text-sm text-[var(--muted)]">{booking.specialty?.name} · <span className={booking.surgicalCase.priority === "Urgent" || booking.surgicalCase.priority === "Emergency" ? "font-semibold text-orange-700" : "font-semibold"}>{booking.surgicalCase.priority}</span></div>
       {booking.preop?.preop_notes && <div className="mt-3 rounded-md bg-black/5 px-3 py-2 text-xs text-[var(--muted)]">{booking.preop.preop_notes}</div>}
-      {!readOnly && !done && !postponed && (
+      {!readOnly && editableBookedCase && (
         <div className="mt-4 grid grid-cols-2 gap-2">
-          <button className="rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-sm font-semibold text-emerald-800" onClick={() => saveBooking({ ...booking, booking_status: "Done", updated_at: todayIso() })}>✓ Mark Done</button>
-          <button className="rounded-lg border border-red-200 bg-red-50 py-2 text-sm font-semibold text-red-800" onClick={() => saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: "Cancelled from day panel", updated_at: todayIso() })}>× Cancel</button>
+          <button
+            className="rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-sm font-semibold text-emerald-800"
+            onClick={() => {
+              void saveBooking({ ...booking, booking_status: "Done", updated_at: todayIso() }).catch((error) => {
+                window.alert(error instanceof Error ? error.message : "Could not mark booking done.");
+              });
+            }}
+          >
+            ✓ Mark Done
+          </button>
+          <button
+            className="rounded-lg border border-red-200 bg-red-50 py-2 text-sm font-semibold text-red-800"
+            onClick={() => {
+              void saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: "Cancelled from day panel", updated_at: todayIso() }).catch((error) => {
+                window.alert(error instanceof Error ? error.message : "Could not cancel booking.");
+              });
+            }}
+          >
+            × Cancel
+          </button>
         </div>
       )}
     </article>
@@ -1068,13 +1459,31 @@ function SpecialtyListsScreen({
 }
 
 function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { data: OrodhaData; bookings: EnrichedBooking[]; selectedDate: string; setSelectedDate: (date: string) => void }) {
-  const rows = bookings.filter((booking) => booking.session.session_date === selectedDate && booking.booking_status !== "Cancelled").sort((a, b) => a.slot - b.slot);
+  const rows = bookings
+    .filter((booking) => booking.session.session_date === selectedDate && booking.booking_status !== "Cancelled")
+    .sort((a, b) => a.slot - b.slot);
   const session = data.theatre_sessions.find((item) => item.session_date === selectedDate);
   const maxCases = session?.max_cases || 3;
+  const activeCases = rows.filter((booking) => isCapacityBooking(booking)).length;
+  const availableCases = Math.max(maxCases - activeCases, 0);
+  const blockedDay = Boolean(session?.is_blocked);
+
   function exportCsv() {
     const csv = [
       ["Slot", "Patient", "UMR", "Procedure", "Diagnosis", "Specialty", "Contact"].join(","),
-      ...rows.map((booking) => [booking.slot, booking.patient.full_name, booking.patient.hospital_number, booking.surgicalCase.procedure_name, booking.surgicalCase.diagnosis || "", booking.specialty?.name || "", booking.patient.phone_primary || ""].map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")),
+      ...rows.map((booking) =>
+        [
+          booking.slot,
+          booking.patient.full_name,
+          booking.patient.hospital_number,
+          booking.surgicalCase.procedure_name,
+          booking.surgicalCase.diagnosis || "",
+          booking.specialty?.name || "",
+          booking.patient.phone_primary || "",
+        ]
+          .map((cell) => `"${String(cell).replaceAll('"', '""')}"`)
+          .join(","),
+      ),
     ].join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const link = document.createElement("a");
@@ -1083,51 +1492,69 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
     link.click();
     URL.revokeObjectURL(url);
   }
+
   return (
     <section className="px-9 py-6">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-5 flex items-end justify-between gap-6">
         <PageTitle title="Theatre List" subtitle="Printable daily case list" />
-        <div className="flex gap-3">
-          <input className="input w-[208px] py-2.5" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+        <div className="flex items-center gap-3">
+          <input className="input w-[214px] py-2.5 text-[0.96rem]" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
           <button className="btn-primary" onClick={() => { exportCsv(); window.print(); }}>Print / PDF</button>
         </div>
       </div>
-      <div id="print-area" className="max-w-[1030px] overflow-hidden rounded-xl border border-[var(--border)] bg-white">
-        <div className="flex items-center justify-between bg-[var(--green-deep)] px-8 py-5 text-white">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-[0.1em] text-[#9cc9aa]">Paediatric Surgery Unit</div>
-            <div className="mt-1 text-2xl font-bold">Daily Theatre List</div>
-            <div className="mt-1 text-lg">{format(parseISO(selectedDate), "EEEE, d MMMM yyyy")}</div>
+      <div id="print-area" className="max-w-[1036px] overflow-hidden rounded-xl border border-[var(--border)] bg-white">
+        <div className="flex items-start justify-between gap-8 bg-[var(--green-deep)] px-8 py-4 text-white">
+          <div className="min-w-0">
+            <div className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-[#9cc9aa]">Paediatric Surgery Unit</div>
+            <div className="mt-1 text-[1.9rem] font-semibold leading-tight">Daily Theatre List</div>
+            <div className="mt-1 text-[1rem] text-[#d7eadb]">{format(parseISO(selectedDate), "EEEE, d MMMM yyyy")}</div>
           </div>
-          <div>
-            <div className="text-sm text-[#9cc9aa]">Cases</div>
-            <div className="text-4xl font-bold">{rows.length}<span className="text-xl text-[#9cc9aa]">/{maxCases}</span></div>
+          <div className="grid grid-cols-3 gap-6 text-right">
+            <div>
+              <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#9cc9aa]">Listed</div>
+              <div className="mt-1 text-[2.15rem] font-semibold leading-none">{rows.length}</div>
+            </div>
+            <div>
+              <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#9cc9aa]">Available</div>
+              <div className="mt-1 text-[2.15rem] font-semibold leading-none">{availableCases}</div>
+            </div>
+            <div>
+              <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#9cc9aa]">Status</div>
+              <div className="mt-1 text-sm font-semibold text-[#d7eadb]">{blockedDay ? "Blocked day" : `${activeCases}/${maxCases} active`}</div>
+            </div>
           </div>
         </div>
-        <div className="space-y-4 p-7">
+        <div className="space-y-3.5 p-6 print-area">
           {rows.map((booking) => (
-            <div key={booking.id} className="rounded-xl border border-[var(--border)] p-6">
+            <div key={booking.id} className="print-case-card rounded-xl border border-[var(--border)] px-6 py-5">
               <div className="flex items-start gap-4">
-                <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--green-deep)] text-base font-bold text-white">{booking.slot}</div>
+                <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[var(--green-deep)] text-[1.15rem] font-semibold text-white">#{booking.slot}</div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex justify-between gap-3">
-                    <div>
-                      <div className="text-xl font-bold">{booking.patient.full_name}</div>
-                      <div className="text-[var(--muted)]">{booking.patient.hospital_number} · {booking.patient.sex} · Age {childAge(booking.patient.date_of_birth, booking.patient.age_text)}</div>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[1.55rem] font-semibold leading-tight">{booking.patient.full_name}</div>
+                      <div className="mt-1 text-[0.98rem] text-[var(--muted)]">
+                        {booking.patient.hospital_number} | {booking.patient.sex} | Age {childAge(booking.patient.date_of_birth, booking.patient.age_text)}
+                      </div>
                     </div>
-                    <div className={booking.surgicalCase.priority === "Urgent" || booking.surgicalCase.priority === "Emergency" ? "font-bold text-orange-700" : "font-bold text-slate-700"}>{booking.surgicalCase.priority}</div>
+                    <div className="flex items-center gap-2">
+                      <Badge tone={booking.surgicalCase.priority === "Urgent" || booking.surgicalCase.priority === "Emergency" ? "amber" : "slate"}>
+                        {booking.surgicalCase.priority}
+                      </Badge>
+                      <StatusBadge status={booking.booking_status} />
+                    </div>
                   </div>
-                  <div className="mt-4 grid gap-2.5 md:grid-cols-2">
-                    <InfoRow label="Procedure" value={booking.surgicalCase.procedure_name} />
-                    <InfoRow label="Specialty" value={booking.specialty?.name || "-"} />
-                    <InfoRow label="Diagnosis" value={booking.surgicalCase.diagnosis || "-"} />
-                    <InfoRow label="Contact" value={booking.patient.phone_primary || "-"} />
-                    <InfoRow label="SHA" value={booking.patient.sha_status} />
+                  <div className="mt-4 grid gap-x-10 gap-y-2.5 md:grid-cols-2">
+                    <CompactInfoRow label="Procedure" value={booking.surgicalCase.procedure_name} />
+                    <CompactInfoRow label="Specialty" value={booking.specialty?.name || "-"} />
+                    <CompactInfoRow label="Diagnosis" value={booking.surgicalCase.diagnosis || "-"} />
+                    <CompactInfoRow label="Contact" value={booking.patient.phone_primary || "-"} />
+                    <CompactInfoRow label="SHA" value={booking.patient.sha_status} />
                   </div>
                   {booking.preop?.preop_notes && (
-                    <div className="mt-4 border-l-4 border-[var(--green-accent)] bg-emerald-50 px-4 py-3">
-                      <div className="text-sm font-bold uppercase text-emerald-800">Pre-op notes</div>
-                      <div>{booking.preop.preop_notes}</div>
+                    <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/80 px-4 py-3">
+                      <div className="text-[0.74rem] font-semibold uppercase tracking-[0.1em] text-emerald-800">Pre-op notes</div>
+                      <div className="mt-1 text-[0.96rem] leading-6 text-emerald-950">{booking.preop.preop_notes}</div>
                     </div>
                   )}
                 </div>
@@ -1137,10 +1564,14 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
           {Array.from({ length: maxCases }, (_, index) => index + 1)
             .filter((slot) => !rows.some((booking) => booking.slot === slot))
             .map((slot) => (
-              <div key={`empty-${slot}`} className="rounded-xl border border-dashed border-[var(--border)] p-5 text-sm font-semibold uppercase tracking-[0.04em] text-slate-300">
-                Slot {slot} - not booked
+              <div key={`empty-${slot}`} className="rounded-xl border border-dashed border-[var(--border)] px-5 py-4 text-[0.82rem] font-semibold uppercase tracking-[0.08em] text-slate-300">
+                Slot {slot} - available
               </div>
             ))}
+          <div className="flex items-center justify-between border-t border-[var(--border)] pt-3 text-[0.8rem] text-[var(--muted)]">
+            <div>Generated {format(today, "d MMM yyyy, HH:mm")}</div>
+            <div>Orodha - Paediatric Theatre Management</div>
+          </div>
         </div>
       </div>
     </section>
@@ -1151,14 +1582,29 @@ function UserManagementScreen({
   profiles,
   appUser,
   source,
+  data,
   saveProfile,
+  clearClinicalData,
+  seedDemoWorkspace,
+  seedingDemo,
 }: {
   profiles: Profile[];
   appUser: AppUser;
   source: "demo" | "supabase";
+  data: OrodhaData;
   saveProfile: (profile: Profile) => Promise<void>;
+  clearClinicalData: () => Promise<void>;
+  seedDemoWorkspace: () => Promise<void>;
+  seedingDemo: boolean;
 }) {
   const supportedRoles: UserRole[] = ["Admin", "Surgeon", "Anaesthetist"];
+  const clinicalRows =
+    data.patients.length +
+    data.theatre_sessions.length +
+    data.surgical_cases.length +
+    data.preop_assessments.length +
+    data.bookings.length +
+    data.case_notes.length;
   const sortedProfiles = [...profiles].sort((a, b) => {
     if (a.id === appUser.id) return -1;
     if (b.id === appUser.id) return 1;
@@ -1168,11 +1614,68 @@ function UserManagementScreen({
 
   return (
     <section className="px-10 py-12">
-      <PageHeader title="Users" subtitle="Approve accounts and assign clinical access roles" />
-      <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-        {source === "supabase"
-          ? "Changes here update the shared profiles table immediately."
-          : "Demo mode keeps these access changes in this browser only, so you can preview the workflow before wiring Supabase."}
+      <PageHeader title="Admin" subtitle="Manage access and prepare the workspace for clinical use" />
+
+      <div className="mt-7 grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <div className="rounded-[1.75rem] border border-[var(--border)] bg-white p-5 shadow-[var(--shadow-card)]">
+          <div className="flex items-start gap-4">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-800">
+              <UserCog size={22} />
+            </div>
+            <div>
+              <div className="text-lg font-bold">User access</div>
+              <p className="mt-1 max-w-[620px] text-sm leading-6 text-[var(--muted)]">
+                Approve new accounts and assign Admin, Surgeon, or Anaesthetist roles. Non-admin clinical users remain read-only.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+            {source === "supabase"
+              ? "Changes here update the shared profiles table immediately."
+              : "Demo mode keeps these access changes in this browser only."}
+          </div>
+        </div>
+
+        <div className="rounded-[1.75rem] border border-[var(--border)] bg-white p-5 shadow-[var(--shadow-card)]">
+          <div className="flex items-start gap-4">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-700">
+              <Database size={22} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-lg font-bold">Workspace data</div>
+                  <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                    Clear demo clinical records before entering real patients. Reference lists and users are kept.
+                  </p>
+                </div>
+                <Badge tone={clinicalRows > 0 ? "amber" : "slate"}>{clinicalRows} rows</Badge>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button
+                  className="btn-secondary min-h-0 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={seedDemoWorkspace}
+                  disabled={source !== "supabase" || seedingDemo}
+                  title={source !== "supabase" ? "Demo loading is only needed for Supabase workspaces." : "Load starter demo data"}
+                >
+                  {seedingDemo ? "Loading demo..." : "Load demo data"}
+                </button>
+                <button
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={clearClinicalData}
+                  disabled={clinicalRows === 0}
+                  title="Clear patients, bookings, cases, theatre sessions, pre-op assessments, and notes"
+                >
+                  Clear clinical data
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-9">
+        <PageHeader title="Users" subtitle="Approve accounts and assign clinical access roles" />
       </div>
       <TableShell className="mt-6">
         <table className="data-table">
@@ -1356,6 +1859,7 @@ function NewBookingScreen({
   done: (date: string) => void;
 }) {
   const [bookingDate, setBookingDate] = useState(defaultDate);
+  const [formError, setFormError] = useState("");
   const selectedPatient = patientId ? data.patients.find((patient) => patient.id === patientId) || null : null;
   const searchTerm = search.trim().toLowerCase();
   const results = searchTerm
@@ -1370,71 +1874,89 @@ function NewBookingScreen({
     [data, selectedBookingSession],
   );
   const isSelectedBookingDateFull = selectedBookingCapacity.isFull;
+  const isSelectedBookingDatePast = isPastTheatreDate(bookingDate);
+  const isSelectedBookingDateBlocked = Boolean(selectedBookingSession?.is_blocked);
+  const selectedBookingAvailableSlots = useMemo(
+    () => availableSlotsForDate(data, bookingDate, selectedBookingSession),
+    [bookingDate, data, selectedBookingSession],
+  );
+  const cannotConfirmBooking =
+    !selectedPatient ||
+    isSelectedBookingDateFull ||
+    isSelectedBookingDatePast ||
+    isSelectedBookingDateBlocked ||
+    selectedBookingAvailableSlots.length === 0;
 
   async function submitBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedPatient || isSelectedBookingDateFull) return;
-    const form = new FormData(event.currentTarget);
-    const date = bookingDate;
-    let session = data.theatre_sessions.find((item) => item.session_date === date);
-    if (!session) {
-      session = {
-        id: createId("session"),
-        theatre_id: data.theatres[0]?.id || "",
-        session_date: date,
-        session_name: "Paediatric Surgery List",
-        max_cases: 3,
-        start_time: "08:00",
-        end_time: "16:00",
-        is_blocked: false,
-        block_reason: null,
-        notes: null,
+    if (cannotConfirmBooking) return;
+    setFormError("");
+    try {
+      const form = new FormData(event.currentTarget);
+      const date = bookingDate;
+      let session = data.theatre_sessions.find((item) => item.session_date === date);
+      if (!session) {
+        session = {
+          id: createId("session"),
+          theatre_id: data.theatres[0]?.id || "",
+          session_date: date,
+          session_name: "Paediatric Surgery List",
+          max_cases: 3,
+          start_time: "08:00",
+          end_time: "16:00",
+          is_blocked: false,
+          block_reason: null,
+          notes: null,
+          created_at: todayIso(),
+        };
+        await saveSession(session);
+      }
+      const specialtyId = String(form.get("specialty_id"));
+      const caseId = createId("case");
+      const selectedSlot = Number(form.get("slot") || selectedBookingAvailableSlots[0] || 1);
+      const surgicalCase: SurgicalCase = {
+        id: caseId,
+        patient_id: selectedPatient.id,
+        specialty_id: specialtyId,
+        procedure_id: null,
+        procedure_name: String(form.get("procedure_name")),
+        diagnosis: String(form.get("diagnosis") || "") || null,
+        indication: null,
+        case_description: null,
+        priority: String(form.get("priority") || "Elective") as SurgicalCase["priority"],
+        status: "Booked",
+        estimated_duration_minutes: Number(form.get("estimated_duration_minutes") || 0) || null,
+        weight_kg: null,
+        asa_class: null,
+        comorbidities: null,
+        allergies: null,
+        special_requirements: String(form.get("preop_notes") || "") || null,
+        surgeon_id: null,
+        anaesthetist_id: null,
         created_at: todayIso(),
+        updated_at: todayIso(),
       };
-      await saveSession(session);
+      const booking: Booking = {
+        id: createId("booking"),
+        case_id: caseId,
+        session_id: session.id,
+        slot: selectedSlot,
+        booking_status: "Booked",
+        order_on_list: selectedSlot,
+        postop_destination: null,
+        cancellation_reason: null,
+        postponement_reason: null,
+        outcome_notes: null,
+        created_at: todayIso(),
+        updated_at: todayIso(),
+      };
+      await saveCase(surgicalCase);
+      await savePreop({ ...defaultPreop(caseId), preop_notes: String(form.get("preop_notes") || "") || null });
+      await saveBooking(booking);
+      done(date);
+    } catch (error) {
+      setFormError(describeError(error));
     }
-    const specialtyId = String(form.get("specialty_id"));
-    const caseId = createId("case");
-    const surgicalCase: SurgicalCase = {
-      id: caseId,
-      patient_id: selectedPatient.id,
-      specialty_id: specialtyId,
-      procedure_id: null,
-      procedure_name: String(form.get("procedure_name")),
-      diagnosis: String(form.get("diagnosis") || "") || null,
-      indication: null,
-      case_description: null,
-      priority: String(form.get("priority") || "Elective") as SurgicalCase["priority"],
-      status: "Booked",
-      estimated_duration_minutes: Number(form.get("estimated_duration_minutes") || 0) || null,
-      weight_kg: null,
-      asa_class: null,
-      comorbidities: null,
-      allergies: null,
-      special_requirements: String(form.get("preop_notes") || "") || null,
-      surgeon_id: null,
-      anaesthetist_id: null,
-      created_at: todayIso(),
-      updated_at: todayIso(),
-    };
-    const booking: Booking = {
-      id: createId("booking"),
-      case_id: caseId,
-      session_id: session.id,
-      slot: Number(form.get("slot") || 1),
-      booking_status: "Booked",
-      order_on_list: Number(form.get("slot") || 1),
-      postop_destination: null,
-      cancellation_reason: null,
-      postponement_reason: null,
-      outcome_notes: null,
-      created_at: todayIso(),
-      updated_at: todayIso(),
-    };
-    await saveCase(surgicalCase);
-    await savePreop({ ...defaultPreop(caseId), preop_notes: String(form.get("preop_notes") || "") || null });
-    await saveBooking(booking);
-    done(date);
   }
 
   return (
@@ -1446,10 +1968,22 @@ function NewBookingScreen({
         <button className={clsx("px-6 py-2.5 text-base font-semibold", step === "patient" ? "bg-[var(--green-deep)] text-white" : "text-[var(--green-deep)]")} onClick={() => setStep("patient")}>{step === "details" ? "✓ " : ""}Patient</button>
         <button className={clsx("px-6 py-2.5 text-base font-semibold", step === "details" ? "bg-[var(--green-deep)] text-white" : "text-[var(--muted)]")} disabled={!selectedPatient} onClick={() => setStep("details")}>Details</button>
       </div>
+      {isSelectedBookingDatePast && (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800">
+          <div className="font-semibold">{format(parseISO(bookingDate), "d MMMM yyyy")} is in the past.</div>
+          <div className="mt-1">Choose today or a future theatre date before confirming the booking.</div>
+        </div>
+      )}
       {isSelectedBookingDateFull && (
         <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <div className="font-semibold">{format(parseISO(bookingDate), "d MMMM yyyy")} is already fully booked.</div>
           <div className="mt-1">You can still continue here, then choose a different theatre date before confirming the booking.</div>
+        </div>
+      )}
+      {isSelectedBookingDateBlocked && (
+        <div className="mt-5 rounded-xl border border-slate-300 bg-slate-100 px-4 py-3 text-sm text-slate-800">
+          <div className="font-semibold">{format(parseISO(bookingDate), "d MMMM yyyy")} is blocked.</div>
+          <div className="mt-1">{selectedBookingSession?.block_reason || "Choose another theatre date before confirming the booking."}</div>
         </div>
       )}
       {step === "patient" ? (
@@ -1488,12 +2022,25 @@ function NewBookingScreen({
       ) : (
         <form onSubmit={submitBooking} className="mt-6 rounded-2xl border border-[var(--border)] bg-white p-7">
           <h2 className="text-xl font-bold">Booking details</h2>
+          {formError && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              {formError}
+            </div>
+          )}
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Field label="Theatre date *">
               <input className="input" type="date" name="session_date" value={bookingDate} onChange={(event) => setBookingDate(event.target.value)} required />
+              {isSelectedBookingDatePast && <div className="mt-2 text-sm font-medium text-slate-700">Only today or future dates can have bookings.</div>}
               {isSelectedBookingDateFull && <div className="mt-2 text-sm font-medium text-amber-800">This date already has {selectedBookingCapacity.booked}/{selectedBookingSession?.max_cases || 3} slots filled. Please choose another day.</div>}
+              {isSelectedBookingDateBlocked && <div className="mt-2 text-sm font-medium text-slate-700">This theatre date is blocked. Please choose another day.</div>}
             </Field>
-            <Field label="Slot *"><SelectBare name="slot" options={["1", "2", "3"].map((slot) => `Slot ${slot}`)} /></Field>
+            <Field label="Slot *">
+              <SelectBare
+                name="slot"
+                options={selectedBookingAvailableSlots.length ? selectedBookingAvailableSlots.map((slot) => `Slot ${slot}`) : [{ value: "", label: "No available slot" }]}
+                disabled={cannotConfirmBooking}
+              />
+            </Field>
             <Field label="Specialty *"><SelectBare name="specialty_id" options={data.specialties.map((item) => ({ value: item.id, label: item.name }))} /></Field>
             <Field label="Urgency"><SelectBare name="priority" options={["Elective", "Semi-urgent", "Urgent", "Emergency"]} /></Field>
             <Field label="Procedure *" className="md:col-span-2"><input className="input" name="procedure_name" placeholder="e.g. Orchidopexy" required /></Field>
@@ -1503,7 +2050,7 @@ function NewBookingScreen({
           </div>
           <div className="mt-7 flex justify-between border-t border-[var(--border)] pt-6">
             <button className="btn-secondary" type="button" onClick={() => setStep("patient")}>← Back</button>
-            <button className="btn-primary px-6 disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={isSelectedBookingDateFull}>Confirm booking</button>
+            <button className="btn-primary px-6 disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={cannotConfirmBooking}>Confirm booking</button>
           </div>
         </form>
       )}
@@ -1609,9 +2156,19 @@ function Field({ label, children, className }: { label: string; children: ReactN
   return <label className={clsx("block text-base font-semibold", className)}><span className="mb-2 block">{label}</span>{children}</label>;
 }
 
-function SelectBare({ name, options, defaultValue }: { name: string; options: (string | { value: string; label: string })[]; defaultValue?: string }) {
+function SelectBare({
+  name,
+  options,
+  defaultValue,
+  disabled,
+}: {
+  name: string;
+  options: (string | { value: string; label: string })[];
+  defaultValue?: string;
+  disabled?: boolean;
+}) {
   return (
-    <select className="input" name={name} defaultValue={defaultValue}>
+    <select className="input disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400" name={name} defaultValue={defaultValue} disabled={disabled}>
       {options.map((option) => {
         const value = typeof option === "string" ? option.replace("Slot ", "") : option.value;
         const label = typeof option === "string" ? option : option.label;
@@ -1662,17 +2219,57 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function CompactInfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[96px_1fr] gap-3">
+      <div className="text-[0.79rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">{label}</div>
+      <div className="text-[0.98rem] font-medium text-[var(--text)]">{value}</div>
+    </div>
+  );
+}
+
 function EmptySlot({ slot }: { slot: number }) {
   return <div className="rounded-xl border border-dashed border-[var(--border)] p-5 text-[var(--muted)]">Slot {slot} - available</div>;
 }
 
+const capacityBookingStatuses: BookingStatus[] = ["Booked", "Done", "No-show"];
+
+function isCapacityBooking(booking: Pick<Booking, "booking_status">) {
+  return capacityBookingStatuses.includes(booking.booking_status);
+}
+
+function isPastTheatreDate(date: string) {
+  return date < today;
+}
+
+function availableSlotsForDate(data: OrodhaData, date: string, session: TheatreSession | null) {
+  const maxCases = session?.max_cases || 3;
+  const occupiedSlots = new Set(
+    data.bookings
+      .filter((booking) => booking.session_id === session?.id && isCapacityBooking(booking))
+      .map((booking) => booking.slot),
+  );
+
+  return Array.from({ length: maxCases }, (_, index) => index + 1).filter((slot) => !occupiedSlots.has(slot));
+}
+
+function describeError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const maybe = error as { message?: string; details?: string; hint?: string; code?: string };
+    const message = [maybe.message, maybe.details, maybe.hint, maybe.code ? `(${maybe.code})` : ""].filter(Boolean).join(" ");
+    if (message) return message;
+  }
+  return "Something went wrong while saving. Please try again.";
+}
+
 function calendarCellTone(session?: TheatreSession, capacity?: { booked: number; isFull: boolean } | null, isWeekend = false) {
-  if (!session) return isWeekend ? "border-slate-200 bg-slate-50 text-slate-300" : "bg-white text-slate-300";
+  if (!session) return isWeekend ? "border-slate-200 bg-slate-100 text-slate-300" : "bg-white text-slate-300";
   if (session.is_blocked) return "border-slate-400 bg-slate-200 text-slate-700";
   if (capacity?.isFull) return "border-red-300 bg-red-100 text-red-700";
   if ((capacity?.booked || 0) >= 2) return "border-amber-300 bg-amber-100 text-amber-800";
   if ((capacity?.booked || 0) >= 1) return "border-emerald-200 bg-emerald-100 text-emerald-800";
-  return isWeekend ? "border-slate-200 bg-slate-50 text-slate-300" : "bg-white text-slate-300";
+  return isWeekend ? "border-slate-200 bg-slate-100 text-slate-300" : "bg-white text-slate-300";
 }
 
 function badgeClass(tone: "green" | "amber" | "red" | "slate" | "blue") {
@@ -1726,3 +2323,4 @@ function defaultPreop(caseId: string): OrodhaData["preop_assessments"][number] {
     updated_at: todayIso(),
   };
 }
+
