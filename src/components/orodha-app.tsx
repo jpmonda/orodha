@@ -4,6 +4,7 @@ import clsx from "clsx";
 import Image from "next/image";
 import {
   ArrowLeft,
+  BarChart3,
   CalendarDays,
   Check,
   Clipboard,
@@ -45,7 +46,7 @@ import {
   todayIso,
 } from "@/lib/orodha/utils";
 
-type MainView = "calendar" | "patients" | "lists" | "daily" | "users" | "audit";
+type MainView = "calendar" | "patients" | "lists" | "daily" | "reports" | "users" | "audit";
 type ViewKey = MainView | "new-patient" | "new-booking";
 type BookingStep = "patient" | "details";
 type DemoRole = "Admin" | "Surgeon" | "Anaesthetist";
@@ -86,6 +87,7 @@ const navItems: { key: MainView; label: string; icon: ReactNode }[] = [
   { key: "patients", label: "Patients", icon: <UsersRound /> },
   { key: "lists", label: "Specialty Lists", icon: <Clipboard /> },
   { key: "daily", label: "Theatre List", icon: <Printer /> },
+  { key: "reports", label: "Reports", icon: <BarChart3 /> },
   { key: "users", label: "Admin", icon: <UserCog /> },
   { key: "audit", label: "Audit Log", icon: <FileText /> },
 ];
@@ -684,6 +686,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             />
           )}
           {contentView === "daily" && <TheatreListScreen data={data} bookings={bookings} selectedDate={selectedDate} setSelectedDate={setSelectedDate} />}
+          {contentView === "reports" && <ReportsScreen bookings={bookings} />}
           {contentView === "users" && isAdmin && (
             <UserManagementScreen
               profiles={profiles}
@@ -1772,6 +1775,121 @@ function UserManagementScreen({
               );
             })}
           </tbody>
+        </table>
+      </TableShell>
+    </section>
+  );
+}
+
+function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+
+  const months = eachMonthOfInterval({
+    start: startOfYear(new Date(year, 0, 1)),
+    end: endOfYear(new Date(year, 0, 1)),
+  });
+
+  const allYears = Array.from(
+    new Set(bookings.map((b) => parseISO(b.session.session_date).getFullYear()))
+  ).sort((a, b) => b - a);
+  if (!allYears.includes(today.getFullYear())) allYears.unshift(today.getFullYear());
+
+  const statuses: BookingStatus[] = ["Booked", "Done", "Cancelled", "Postponed", "No-show"];
+
+  const rows = months.map((month) => {
+    const label = format(month, "MMMM");
+    const key = format(month, "yyyy-MM");
+    const monthBookings = bookings.filter(
+      (b) => format(parseISO(b.session.session_date), "yyyy-MM") === key
+    );
+    const counts = Object.fromEntries(
+      statuses.map((s) => [s, monthBookings.filter((b) => b.booking_status === s).length])
+    ) as Record<BookingStatus, number>;
+    const total = monthBookings.length;
+    return { label, counts, total };
+  });
+
+  const totals = Object.fromEntries(
+    statuses.map((s) => [s, rows.reduce((sum, r) => sum + r.counts[s], 0)])
+  ) as Record<BookingStatus, number>;
+  const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
+
+  const statusColors: Record<BookingStatus, string> = {
+    Booked: "bg-blue-100 text-blue-800",
+    Done: "bg-green-100 text-green-800",
+    Cancelled: "bg-red-100 text-red-800",
+    Postponed: "bg-amber-100 text-amber-800",
+    "No-show": "bg-gray-100 text-gray-600",
+  };
+
+  return (
+    <section className="flex flex-col gap-6 p-6">
+      <div className="flex items-center justify-between">
+        <PageTitle title="Monthly Reports" />
+        <select
+          value={year}
+          onChange={(e) => setYear(Number(e.target.value))}
+          className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm focus:outline-none"
+        >
+          {allYears.map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {statuses.map((s) => (
+          <div key={s} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium text-gray-500">{s}</p>
+            <p className="mt-1 text-2xl font-bold text-gray-900">{totals[s]}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Monthly breakdown table */}
+      <TableShell>
+        <table className="min-w-full divide-y divide-gray-100 text-sm">
+          <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <tr>
+              <th className="px-4 py-3 text-left">Month</th>
+              {statuses.map((s) => (
+                <th key={s} className="px-4 py-3 text-center">{s}</th>
+              ))}
+              <th className="px-4 py-3 text-center">Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {rows.map(({ label, counts, total }) => (
+              <tr key={label} className="hover:bg-gray-50/60">
+                <td className="px-4 py-2.5 font-medium text-gray-700">{label}</td>
+                {statuses.map((s) => (
+                  <td key={s} className="px-4 py-2.5 text-center">
+                    {counts[s] > 0 ? (
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[s]}`}>
+                        {counts[s]}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+                ))}
+                <td className="px-4 py-2.5 text-center font-semibold text-gray-800">
+                  {total > 0 ? total : <span className="text-gray-300">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot className="border-t-2 border-gray-200 bg-gray-50 text-xs font-bold uppercase tracking-wide text-gray-600">
+            <tr>
+              <td className="px-4 py-2.5">Total</td>
+              {statuses.map((s) => (
+                <td key={s} className="px-4 py-2.5 text-center">{totals[s] || "—"}</td>
+              ))}
+              <td className="px-4 py-2.5 text-center">{grandTotal || "—"}</td>
+            </tr>
+          </tfoot>
         </table>
       </TableShell>
     </section>
