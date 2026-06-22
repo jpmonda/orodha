@@ -384,6 +384,44 @@ const bookings: OrodhaData["bookings"] = [
   booking("b29", "c31", "ts-2026-11-03", 1, "Booked", { postop_destination: "Ward" }),
 ];
 
+const emergencyBooking = (
+  id: string,
+  patient_id: string,
+  procedure_notes: string,
+  surgeon: string,
+  urgency: OrodhaData["emergency_bookings"][number]["urgency"],
+  booking_status: OrodhaData["emergency_bookings"][number]["booking_status"],
+  surgery_date: string,
+  overrides: Partial<OrodhaData["emergency_bookings"][number]> = {},
+): OrodhaData["emergency_bookings"][number] => ({
+  id,
+  patient_id,
+  surgical_case_id: null,
+  procedure_notes,
+  surgeon,
+  urgency,
+  booking_status,
+  surgery_date,
+  surgery_time: null,
+  indication: null,
+  cancellation_reason: null,
+  created_at: now,
+  updated_at: now,
+  ...overrides,
+});
+
+const emergency_bookings: OrodhaData["emergency_bookings"] = [
+  emergencyBooking("e1", "p3", "Exploratory Laparotomy", "Dr. Oduya", "P1", "Done", "2026-02-06", { surgery_time: "02:30", indication: "Suspected bowel perforation following blunt abdominal trauma", outcome_notes: "Segment of ileum resected; primary anastomosis." } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e2", "p8", "Appendicectomy", "Dr. Mwangi", "P2", "Done", "2026-03-14", { surgery_time: "09:15", indication: "Acute appendicitis with localised peritonism" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e3", "p15", "I&D Abscess — Neck", "Dr. Oduya", "P3", "Done", "2026-04-02", { surgery_time: "14:00", indication: "Parapharyngeal abscess with impending airway compromise" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e4", "p22", "Reduction of Intussusception", "Dr. Mwangi", "P1", "Done", "2026-05-08", { surgery_time: "06:45", indication: "Failed pneumatic reduction x2; surgical reduction required" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e5", "p6", "Incision & Drainage — Perianal Abscess", "Dr. Oduya", "P3", "Done", "2026-05-21", { surgery_time: "11:30", indication: "Recurrent perianal abscess, fluctuant" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e6", "p18", "Emergency Colostomy", "Dr. Mwangi", "P1", "Done", "2026-06-03", { surgery_time: "03:00", indication: "Sigmoid volvulus with ischaemia" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e7", "p25", "Appendicectomy", "Dr. Oduya", "P2", "Done", "2026-06-10", { surgery_time: "10:00", indication: "Perforated appendicitis with pelvic collection" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e8", "p11", "Exploratory Laparotomy", "Dr. Mwangi", "P1", "Booked", "2026-06-22", { surgery_time: "08:00", indication: "Suspected mesenteric ischaemia" } as Partial<OrodhaData["emergency_bookings"][number]>),
+  emergencyBooking("e9", "p30", "I&D Abscess — Submandibular", "Dr. Oduya", "P2", "Booked", "2026-06-22", { surgery_time: "13:30", indication: "Submandibular space abscess, bilateral" } as Partial<OrodhaData["emergency_bookings"][number]>),
+];
+
 export const demoData: OrodhaData = {
   specialties: [
     { id: "sp-urology", name: "Urological", active: true },
@@ -414,6 +452,7 @@ export const demoData: OrodhaData = {
   surgical_cases,
   preop_assessments,
   bookings,
+  emergency_bookings,
   case_notes: [
     { id: "n1", case_id: "c4", note_type: "Booking", note: "Original booking postponed; rebooked without losing history.", created_at: now },
     { id: "n2", case_id: "c11", note_type: "Cancellation", note: "Cancelled after URI symptoms on pre-op review.", created_at: now },

@@ -27,7 +27,10 @@ import { deleteRow, fetchCurrentProfile, fetchOrodhaData, fetchProfiles, getCurr
 import type {
   Booking,
   BookingStatus,
+  EmergencyBooking,
+  EmergencyUrgency,
   EnrichedBooking,
+  EnrichedEmergencyBooking,
   OrodhaData,
   Patient,
   Profile,
@@ -279,6 +282,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
   const [bookingSearch, setBookingSearch] = useState("");
   const [selectedSpecialtyId, setSelectedSpecialtyId] = useState("sp-urology");
   const [statusFilter, setStatusFilter] = useState<"All" | "Pending" | "Done" | "Cancelled">("All");
+  const [calendarTab, setCalendarTab] = useState<"elective" | "emergency">("elective");
   const isAdmin = appUser.role === "Admin";
   const readOnly = !isAdmin;
 
@@ -318,6 +322,19 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
   }, [profiles, source]);
 
   const bookings = useMemo(() => enrichBookings(data), [data]);
+  const emergencyBookings = useMemo<EnrichedEmergencyBooking[]>(
+    () =>
+      data.emergency_bookings
+        .map((eb) => {
+          const patient = data.patients.find((p) => p.id === eb.patient_id);
+          if (!patient) return null;
+          const linkedCase = data.surgical_cases.find((c) => c.id === eb.surgical_case_id) || null;
+          return { ...eb, patient, linkedCase };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b!.surgery_date.localeCompare(a!.surgery_date)) as EnrichedEmergencyBooking[],
+    [data],
+  );
   const selectedSession = selectedDate
     ? data.theatre_sessions.find((session) => session.session_date === selectedDate) || virtualSession(selectedDate, data)
     : null;
@@ -376,6 +393,10 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
     }
   }
 
+  async function saveEmergencyBooking(eb: EmergencyBooking) {
+    await upsertCollection("emergency_bookings", "emergency_bookings", eb);
+  }
+
   async function saveProfile(profile: Profile) {
     setProfiles((current) => replaceById(current, { ...profile, updated_at: todayIso() }));
     if (source === "supabase") await upsertRow("profiles", { ...profile, updated_at: todayIso() });
@@ -400,6 +421,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
       const current = source === "supabase" ? (await fetchOrodhaData()) || data : data;
       const deletePlan: [keyof OrodhaData, string][] = [
         ["case_notes", "case_notes"],
+        ["emergency_bookings", "emergency_bookings"],
         ["bookings", "bookings"],
         ["preop_assessments", "preop_assessments"],
         ["surgical_cases", "surgical_cases"],
@@ -421,6 +443,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
         surgical_cases: [],
         preop_assessments: [],
         bookings: [],
+        emergency_bookings: [],
         case_notes: [],
         theatre_sessions: [],
       }));
@@ -621,33 +644,64 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             </div>
           )}
           {contentView === "calendar" && (
-            <CalendarScreen
-              data={data}
-              selectedDate={selectedDate}
-              selectedSession={selectedSession}
-              dayBookings={selectedDayBookings}
-              setSelectedDate={setSelectedDate}
-              openBlockDay={(date, reason) => {
-                if (readOnly) {
-                  setNotice(`${appUser.role} access is read-only. Only admins can block theatre days.`);
-                  return;
-                }
-                setBlockingDate(date);
-                setBlockReason(reason || "");
-              }}
-              startNewBooking={() => {
-                if (readOnly) {
-                  setNotice(`${appUser.role} access is read-only. Only admins can create bookings.`);
-                  return;
-                }
-                if (selectedDateIsPast) {
-                  setNotice("The selected theatre day is in the past. Choose today or a future date in the booking form.");
-                }
-                startNewBooking();
-              }}
-              saveBooking={saveBooking}
-              readOnly={readOnly}
-            />
+            <>
+              <div className="flex gap-0 border-b border-[var(--border)] bg-white px-6">
+                {(["elective", "emergency"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setCalendarTab(tab)}
+                    className={clsx(
+                      "border-b-2 px-5 py-3 text-sm font-semibold capitalize transition-colors",
+                      calendarTab === tab
+                        ? tab === "emergency"
+                          ? "border-red-600 text-red-600"
+                          : "border-[var(--green-deep)] text-[var(--green-deep)]"
+                        : "border-transparent text-gray-500 hover:text-gray-800",
+                    )}
+                  >
+                    {tab === "emergency" ? "Emergency" : "Elective"}
+                  </button>
+                ))}
+              </div>
+              {calendarTab === "elective" && (
+                <CalendarScreen
+                  data={data}
+                  selectedDate={selectedDate}
+                  selectedSession={selectedSession}
+                  dayBookings={selectedDayBookings}
+                  setSelectedDate={setSelectedDate}
+                  openBlockDay={(date, reason) => {
+                    if (readOnly) {
+                      setNotice(`${appUser.role} access is read-only. Only admins can block theatre days.`);
+                      return;
+                    }
+                    setBlockingDate(date);
+                    setBlockReason(reason || "");
+                  }}
+                  startNewBooking={() => {
+                    if (readOnly) {
+                      setNotice(`${appUser.role} access is read-only. Only admins can create bookings.`);
+                      return;
+                    }
+                    if (selectedDateIsPast) {
+                      setNotice("The selected theatre day is in the past. Choose today or a future date in the booking form.");
+                    }
+                    startNewBooking();
+                  }}
+                  saveBooking={saveBooking}
+                  readOnly={readOnly}
+                />
+              )}
+              {calendarTab === "emergency" && (
+                <EmergencyScreen
+                  emergencyBookings={emergencyBookings}
+                  patients={data.patients}
+                  surgicalCases={data.surgical_cases}
+                  saveEmergencyBooking={saveEmergencyBooking}
+                  readOnly={readOnly}
+                />
+              )}
+            </>
           )}
           {contentView === "patients" && (
             <PatientsScreen
@@ -686,7 +740,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             />
           )}
           {contentView === "daily" && <TheatreListScreen data={data} bookings={bookings} selectedDate={selectedDate} setSelectedDate={setSelectedDate} />}
-          {contentView === "reports" && <ReportsScreen bookings={bookings} />}
+          {contentView === "reports" && <ReportsScreen bookings={bookings} emergencyBookings={emergencyBookings} />}
           {contentView === "users" && isAdmin && (
             <UserManagementScreen
               profiles={profiles}
@@ -1781,7 +1835,388 @@ function UserManagementScreen({
   );
 }
 
-function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
+const urgencyColors: Record<EmergencyUrgency, string> = {
+  P1: "bg-red-100 text-red-700 border-red-200",
+  P2: "bg-orange-100 text-orange-700 border-orange-200",
+  P3: "bg-amber-100 text-amber-700 border-amber-200",
+};
+const urgencyLabel: Record<EmergencyUrgency, string> = {
+  P1: "Immediate",
+  P2: "Within 4 hrs",
+  P3: "Within 24 hrs",
+};
+
+function EmergencyScreen({
+  emergencyBookings,
+  patients,
+  surgicalCases,
+  saveEmergencyBooking,
+  readOnly,
+}: {
+  emergencyBookings: EnrichedEmergencyBooking[];
+  patients: Patient[];
+  surgicalCases: SurgicalCase[];
+  saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  readOnly: boolean;
+}) {
+  const [dateFilter, setDateFilter] = useState<"today" | "yesterday" | "week" | "all">("today");
+  const [showForm, setShowForm] = useState(false);
+
+  const now = todayInNairobi();
+  const yesterday = format(new Date(new Date(now).getTime() - 86400000), "yyyy-MM-dd");
+  const weekStart = format(new Date(new Date(now).getTime() - 6 * 86400000), "yyyy-MM-dd");
+
+  const filtered = emergencyBookings.filter((e) => {
+    if (dateFilter === "today") return e.surgery_date === now;
+    if (dateFilter === "yesterday") return e.surgery_date === yesterday;
+    if (dateFilter === "week") return e.surgery_date >= weekStart && e.surgery_date <= now;
+    return true;
+  });
+
+  return (
+    <section className="flex flex-col gap-0">
+      <div className="flex items-center justify-between border-b border-[var(--border)] bg-white px-6 py-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Emergency Cases</h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            {filtered.length} case{filtered.length !== 1 ? "s" : ""} · {dateFilter === "today" ? format(new Date(now), "d MMMM yyyy") : dateFilter === "yesterday" ? "Yesterday" : dateFilter === "week" ? "Last 7 days" : "All time"}
+          </p>
+        </div>
+        {!readOnly && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+          >
+            <Plus size={15} />
+            Log Emergency
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-1.5 border-b border-[var(--border)] bg-gray-50/60 px-6 py-2.5">
+        {(["today", "yesterday", "week", "all"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setDateFilter(f)}
+            className={clsx(
+              "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+              dateFilter === f
+                ? "bg-[var(--green-deep)] text-white"
+                : "bg-white text-gray-500 hover:text-gray-800 border border-gray-200",
+            )}
+          >
+            {f === "today" ? "Today" : f === "yesterday" ? "Yesterday" : f === "week" ? "This week" : "All"}
+          </button>
+        ))}
+      </div>
+
+      {showForm && (
+        <EmergencyForm
+          patients={patients}
+          surgicalCases={surgicalCases}
+          defaultDate={now}
+          onSave={async (eb) => {
+            await saveEmergencyBooking(eb);
+            setShowForm(false);
+          }}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-16 text-gray-400">
+          <div className="text-3xl">🚑</div>
+          <p className="text-sm font-medium">No emergency cases for this period</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {filtered.map((eb) => (
+            <EmergencyCard key={eb.id} eb={eb} saveEmergencyBooking={saveEmergencyBooking} readOnly={readOnly} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EmergencyCard({
+  eb,
+  saveEmergencyBooking,
+  readOnly,
+}: {
+  eb: EnrichedEmergencyBooking;
+  saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  readOnly: boolean;
+}) {
+  const done = eb.booking_status === "Done";
+  const cancelled = eb.booking_status === "Cancelled";
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+
+  return (
+    <div className={clsx("flex gap-3 px-6 py-4", (done || cancelled) && "opacity-70")}>
+      <div className={clsx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[11px] font-black", urgencyColors[eb.urgency])}>
+        {eb.urgency}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="font-semibold text-gray-900 text-sm">{eb.patient.full_name} · {eb.patient.hospital_number}</p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {eb.procedure_notes} · {eb.surgeon}
+              {eb.surgery_time && <> · <span className="font-medium">{eb.surgery_time}</span></>}
+            </p>
+            <p className="mt-0.5 text-[11px] text-gray-400">{format(parseISO(eb.surgery_date), "EEE, d MMM yyyy")} · {urgencyLabel[eb.urgency]}</p>
+            {eb.indication && (
+              <p className="mt-1 text-xs text-gray-500 italic">{eb.indication}</p>
+            )}
+            {cancelled && eb.cancellation_reason && (
+              <div className="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[0.72rem] text-red-800">
+                <span className="font-semibold">Reason:</span> {eb.cancellation_reason}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <StatusBadge status={eb.booking_status} compact />
+            {!readOnly && !done && !cancelled && (
+              <div className="flex gap-1">
+                <button
+                  onClick={() => void saveEmergencyBooking({ ...eb, booking_status: "Done", updated_at: todayIso() })}
+                  className="rounded px-2 py-1 text-xs font-semibold text-green-700 hover:bg-green-50"
+                >
+                  Mark Done
+                </button>
+                <button
+                  onClick={() => setConfirmingCancel(true)}
+                  className="rounded px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        {confirmingCancel && (
+          <div className="mt-2 space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5">
+            <p className="text-xs font-semibold text-red-800">Reason for cancellation *</p>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              rows={2}
+              placeholder="Enter reason..."
+              className="w-full rounded border border-red-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 focus:outline-none"
+            />
+            <div className="flex gap-2">
+              <button onClick={() => { setConfirmingCancel(false); setCancelReason(""); }} className="rounded bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100">
+                Keep
+              </button>
+              <button
+                disabled={!cancelReason.trim()}
+                onClick={() => void saveEmergencyBooking({ ...eb, booking_status: "Cancelled", cancellation_reason: cancelReason.trim(), updated_at: todayIso() })}
+                className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40 hover:bg-red-700"
+              >
+                Confirm cancellation
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmergencyForm({
+  patients,
+  surgicalCases,
+  defaultDate,
+  onSave,
+  onCancel,
+}: {
+  patients: Patient[];
+  surgicalCases: SurgicalCase[];
+  defaultDate: string;
+  onSave: (eb: EmergencyBooking) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [urgency, setUrgency] = useState<EmergencyUrgency>("P2");
+  const [patientId, setPatientId] = useState("");
+  const [patientQuery, setPatientQuery] = useState("");
+  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
+  const [procedureQuery, setProcedureQuery] = useState("");
+  const [linkedCaseId, setLinkedCaseId] = useState<string | null>(null);
+  const [showProcedureDropdown, setShowProcedureDropdown] = useState(false);
+  const [surgeon, setSurgeon] = useState("");
+  const [surgeryDate, setSurgeryDate] = useState(defaultDate);
+  const [surgeryTime, setSurgeryTime] = useState("");
+  const [indication, setIndication] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const filteredPatients = patientQuery.trim().length > 0
+    ? patients.filter((p) =>
+        p.full_name.toLowerCase().includes(patientQuery.toLowerCase()) ||
+        p.hospital_number.toLowerCase().includes(patientQuery.toLowerCase())
+      ).slice(0, 6)
+    : [];
+
+  const patientCases = patientId
+    ? surgicalCases.filter((c) => c.patient_id === patientId)
+    : surgicalCases;
+
+  const filteredCases = procedureQuery.trim().length > 1
+    ? patientCases.filter((c) => c.procedure_name.toLowerCase().includes(procedureQuery.toLowerCase())).slice(0, 5)
+    : [];
+
+  const canSave = patientId && procedureQuery.trim() && surgeon.trim() && surgeryDate;
+
+  async function handleSave() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await onSave({
+        id: createId("emg"),
+        patient_id: patientId,
+        surgical_case_id: linkedCaseId,
+        procedure_notes: procedureQuery.trim(),
+        surgeon: surgeon.trim(),
+        urgency,
+        booking_status: "Booked",
+        surgery_date: surgeryDate,
+        surgery_time: surgeryTime.trim() || null,
+        indication: indication.trim() || null,
+        cancellation_reason: null,
+        created_at: todayIso(),
+        updated_at: todayIso(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="border-b border-[var(--border)] bg-gray-50/60 px-6 py-5">
+      <p className="mb-4 text-sm font-semibold text-gray-800">Log Emergency Case</p>
+
+      {/* Urgency */}
+      <div className="mb-4">
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Urgency</p>
+        <div className="flex gap-2">
+          {(["P1", "P2", "P3"] as EmergencyUrgency[]).map((u) => (
+            <button
+              key={u}
+              onClick={() => setUrgency(u)}
+              className={clsx(
+                "flex-1 rounded-lg border-2 py-2 text-center transition-colors",
+                urgency === u ? urgencyColors[u] + " border-current" : "border-gray-200 bg-white text-gray-400 hover:border-gray-300",
+              )}
+            >
+              <div className="text-xs font-black">{u}</div>
+              <div className="text-[10px] mt-0.5 opacity-75">{urgencyLabel[u]}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Patient */}
+      <div className="mb-3 relative">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Patient</label>
+        {patientId ? (
+          <div className="flex items-center justify-between rounded-lg border border-[var(--green-deep)] bg-green-50 px-3 py-2">
+            <span className="text-sm font-medium text-gray-800">{patients.find((p) => p.id === patientId)?.full_name}</span>
+            <button onClick={() => { setPatientId(""); setPatientQuery(""); }} className="text-xs text-gray-400 hover:text-gray-600"><X size={13} /></button>
+          </div>
+        ) : (
+          <>
+            <input
+              value={patientQuery}
+              onChange={(e) => { setPatientQuery(e.target.value); setShowPatientDropdown(true); }}
+              onFocus={() => setShowPatientDropdown(true)}
+              placeholder="Search by name or UMR..."
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]"
+            />
+            {showPatientDropdown && filteredPatients.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg">
+                {filteredPatients.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => { setPatientId(p.id); setPatientQuery(p.full_name); setShowPatientDropdown(false); }}
+                    className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-gray-50"
+                  >
+                    <span className="font-medium">{p.full_name}</span>
+                    <span className="text-xs text-gray-400">{p.hospital_number}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Procedure */}
+      <div className="mb-3 relative">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          Procedure
+          {linkedCaseId && <span className="ml-2 rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">linked</span>}
+        </label>
+        <input
+          value={procedureQuery}
+          onChange={(e) => { setProcedureQuery(e.target.value); setLinkedCaseId(null); setShowProcedureDropdown(true); }}
+          onFocus={() => setShowProcedureDropdown(true)}
+          placeholder="Type procedure name or search existing cases..."
+          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]"
+        />
+        {showProcedureDropdown && filteredCases.length > 0 && (
+          <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg">
+            {filteredCases.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => { setProcedureQuery(c.procedure_name); setLinkedCaseId(c.id); setShowProcedureDropdown(false); }}
+                className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-gray-50"
+              >
+                <span className="font-medium">{c.procedure_name}</span>
+                <span className="text-xs text-gray-400">{c.diagnosis || "No diagnosis recorded"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Surgeon + Date + Time */}
+      <div className="mb-3 grid grid-cols-3 gap-3">
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Surgeon</label>
+          <input value={surgeon} onChange={(e) => setSurgeon(e.target.value)} placeholder="Dr. …" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Date</label>
+          <input type="date" value={surgeryDate} onChange={(e) => setSurgeryDate(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Time (optional)</label>
+          <input type="time" value={surgeryTime} onChange={(e) => setSurgeryTime(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        </div>
+      </div>
+
+      {/* Indication */}
+      <div className="mb-4">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Indication / Notes (optional)</label>
+        <textarea value={indication} onChange={(e) => setIndication(e.target.value)} rows={2} placeholder="Brief clinical indication…" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+        <button
+          disabled={!canSave || saving}
+          onClick={() => void handleSave()}
+          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 hover:bg-red-700"
+        >
+          {saving ? "Saving…" : "Log Case"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBooking[]; emergencyBookings: EnrichedEmergencyBooking[] }) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
 
@@ -1791,7 +2226,10 @@ function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
   });
 
   const allYears = Array.from(
-    new Set(bookings.map((b) => parseISO(b.session.session_date).getFullYear()))
+    new Set([
+      ...bookings.map((b) => parseISO(b.session.session_date).getFullYear()),
+      ...emergencyBookings.map((e) => parseISO(e.surgery_date).getFullYear()),
+    ])
   ).sort((a, b) => b - a);
   if (!allYears.includes(today.getFullYear())) allYears.unshift(today.getFullYear());
 
@@ -1803,17 +2241,22 @@ function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
     const monthBookings = bookings.filter(
       (b) => format(parseISO(b.session.session_date), "yyyy-MM") === key
     );
+    const monthEmergency = emergencyBookings.filter(
+      (e) => format(parseISO(e.surgery_date), "yyyy-MM") === key
+    );
     const counts = Object.fromEntries(
       statuses.map((s) => [s, monthBookings.filter((b) => b.booking_status === s).length])
     ) as Record<BookingStatus, number>;
     const total = monthBookings.length;
-    return { label, counts, total };
+    const emergency = monthEmergency.length;
+    return { label, counts, total, emergency };
   });
 
   const totals = Object.fromEntries(
     statuses.map((s) => [s, rows.reduce((sum, r) => sum + r.counts[s], 0)])
   ) as Record<BookingStatus, number>;
   const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
+  const totalEmergency = rows.reduce((sum, r) => sum + r.emergency, 0);
 
   const statusColors: Record<BookingStatus, string> = {
     Booked: "bg-blue-100 text-blue-800",
@@ -1839,13 +2282,17 @@ function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
         {statuses.map((s) => (
           <div key={s} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
             <p className="text-xs font-medium text-gray-500">{s}</p>
             <p className="mt-1 text-2xl font-bold text-gray-900">{totals[s]}</p>
           </div>
         ))}
+        <div className="rounded-xl border border-red-100 bg-red-50 p-4 shadow-sm">
+          <p className="text-xs font-medium text-red-500">Emergency</p>
+          <p className="mt-1 text-2xl font-bold text-red-700">{totalEmergency}</p>
+        </div>
       </div>
 
       {/* Monthly breakdown table */}
@@ -1857,11 +2304,12 @@ function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
               {statuses.map((s) => (
                 <th key={s} className="px-4 py-3 text-center">{s}</th>
               ))}
+              <th className="px-4 py-3 text-center text-red-500">Emergency</th>
               <th className="px-4 py-3 text-center">Total</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {rows.map(({ label, counts, total }) => (
+            {rows.map(({ label, counts, total, emergency }) => (
               <tr key={label} className="hover:bg-gray-50/60">
                 <td className="px-4 py-2.5 font-medium text-gray-700">{label}</td>
                 {statuses.map((s) => (
@@ -1875,8 +2323,17 @@ function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
                     )}
                   </td>
                 ))}
+                <td className="px-4 py-2.5 text-center">
+                  {emergency > 0 ? (
+                    <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                      {emergency}
+                    </span>
+                  ) : (
+                    <span className="text-gray-300">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-2.5 text-center font-semibold text-gray-800">
-                  {total > 0 ? total : <span className="text-gray-300">—</span>}
+                  {(total + emergency) > 0 ? total + emergency : <span className="text-gray-300">—</span>}
                 </td>
               </tr>
             ))}
@@ -1887,7 +2344,8 @@ function ReportsScreen({ bookings }: { bookings: EnrichedBooking[] }) {
               {statuses.map((s) => (
                 <td key={s} className="px-4 py-2.5 text-center">{totals[s] || "—"}</td>
               ))}
-              <td className="px-4 py-2.5 text-center">{grandTotal || "—"}</td>
+              <td className="px-4 py-2.5 text-center text-red-600">{totalEmergency || "—"}</td>
+              <td className="px-4 py-2.5 text-center">{(grandTotal + totalEmergency) || "—"}</td>
             </tr>
           </tfoot>
         </table>
