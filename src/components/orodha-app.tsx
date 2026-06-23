@@ -1915,16 +1915,23 @@ function EmergencyScreen({
       </div>
 
       {showForm && (
-        <EmergencyForm
-          patients={patients}
-          surgicalCases={surgicalCases}
-          defaultDate={now}
-          onSave={async (eb) => {
-            await saveEmergencyBooking(eb);
-            setShowForm(false);
-          }}
-          onCancel={() => setShowForm(false)}
-        />
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowForm(false); }}
+        >
+          <div className="w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl max-h-[90vh]">
+            <EmergencyForm
+              patients={patients}
+              surgicalCases={surgicalCases}
+              defaultDate={now}
+              onSave={async (eb) => {
+                await saveEmergencyBooking(eb);
+                setShowForm(false);
+              }}
+              onCancel={() => setShowForm(false)}
+            />
+          </div>
+        </div>
       )}
 
       {filtered.length === 0 ? (
