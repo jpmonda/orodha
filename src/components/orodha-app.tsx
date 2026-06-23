@@ -1046,18 +1046,18 @@ function BrandLockup({
 function Sidebar({ activeView, setView, appUser }: { activeView: MainView; setView: (view: MainView) => void; appUser: AppUser }) {
   const visibleItems = appUser.role === "Admin" ? navItems : navItems.filter((item) => item.key !== "audit" && item.key !== "users");
   return (
-    <aside className="hidden w-[248px] shrink-0 bg-[var(--green-deep)] text-white xl:flex xl:flex-col">
-      <div className="flex h-[110px] items-center border-b border-white/10 px-6">
+    <aside className="hidden w-[200px] shrink-0 bg-[var(--green-deep)] text-white xl:flex xl:flex-col">
+      <div className="flex h-[90px] items-center border-b border-white/10 px-4">
         <BrandLockup
           subtitle="Theatre Management"
-          size={56}
-          gapClassName="gap-4"
-          roundedClassName="rounded-[1.05rem]"
-          titleClassName="text-[1.5rem] font-bold leading-none tracking-[-0.01em]"
-          subtitleClassName="mt-1.5 text-[0.94rem] font-medium leading-none text-[#9cc9aa]"
+          size={44}
+          gapClassName="gap-3"
+          roundedClassName="rounded-[0.85rem]"
+          titleClassName="text-[1.25rem] font-bold leading-none tracking-[-0.01em]"
+          subtitleClassName="mt-1 text-[0.8rem] font-medium leading-none text-[#9cc9aa]"
         />
       </div>
-      <nav className="flex-1 space-y-2 px-3 py-4">
+      <nav className="flex-1 space-y-1 px-2.5 py-4">
         {visibleItems.map((item) => (
           <button key={item.key} className={clsx("nav-item", activeView === item.key && "nav-item-active")} onClick={() => setView(item.key)}>
             {item.icon}
@@ -1065,7 +1065,7 @@ function Sidebar({ activeView, setView, appUser }: { activeView: MainView; setVi
           </button>
         ))}
       </nav>
-      <div className="flex h-[84px] items-center gap-3 border-t border-white/10 px-5">
+      <div className="flex h-[72px] items-center gap-2.5 border-t border-white/10 px-4">
         <Avatar appUser={appUser} />
         <div>
           <div className="text-sm font-semibold">{appUser.name}</div>
