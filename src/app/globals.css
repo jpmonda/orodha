@@ -171,6 +171,15 @@ textarea {
   vertical-align: middle;
 }
 
+.audit-table td {
+  padding: 0.44rem 1rem;
+  font-size: 0.84rem;
+}
+
+.audit-table th {
+  padding: 0.55rem 1rem;
+}
+
 .calendar-cell {
   display: grid;
   width: 100%;

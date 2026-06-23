@@ -2486,8 +2486,13 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
   );
 }
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 function AuditLogScreen({ bookings, appUser }: { bookings: EnrichedBooking[]; appUser: AppUser }) {
-  const rows = [
+  const [filterYear, setFilterYear] = useState<number | "all">("all");
+  const [filterMonth, setFilterMonth] = useState<number | "all">("all");
+
+  const allRows = [
     ...bookings.slice(0, 8).map((booking) => ({
       timestamp: format(parseISO(booking.updated_at), "yyyy-MM-dd HH:mm"),
       user: booking.booking_status === "Done" ? "Dr. A. Oduya" : appUser.name,
@@ -2496,11 +2501,45 @@ function AuditLogScreen({ bookings, appUser }: { bookings: EnrichedBooking[]; ap
     })),
     { timestamp: "2026-04-15 09:00", user: appUser.name, action: "Date blocked", target: "2026-05-01 Labour Day" },
   ];
+
+  const availableYears = [...new Set(allRows.map((r) => Number(r.timestamp.slice(0, 4))))].sort((a, b) => b - a);
+  const availableMonths = [...new Set(allRows.map((r) => Number(r.timestamp.slice(5, 7))))].sort((a, b) => a - b);
+
+  const rows = allRows.filter((r) => {
+    const ry = Number(r.timestamp.slice(0, 4));
+    const rm = Number(r.timestamp.slice(5, 7));
+    return (filterYear === "all" || ry === filterYear) && (filterMonth === "all" || rm === filterMonth);
+  });
+
   return (
-    <section className="px-10 py-12">
-      <PageHeader title="Audit Log" subtitle="All booking actions - timestamped and attributable" />
-      <TableShell className="mt-8">
-        <table className="data-table">
+    <section className="px-10 py-8">
+      <div className="mb-5 flex items-end justify-between gap-6">
+        <PageHeader title="Audit Log" subtitle="All booking actions — timestamped and attributable" />
+        <div className="flex items-center gap-2 shrink-0">
+          <select
+            value={filterMonth}
+            onChange={(e) => setFilterMonth(e.target.value === "all" ? "all" : Number(e.target.value))}
+            className="input py-1.5 text-sm"
+          >
+            <option value="all">All months</option>
+            {availableMonths.map((m) => (
+              <option key={m} value={m}>{MONTH_NAMES[m - 1]}</option>
+            ))}
+          </select>
+          <select
+            value={filterYear}
+            onChange={(e) => setFilterYear(e.target.value === "all" ? "all" : Number(e.target.value))}
+            className="input py-1.5 text-sm"
+          >
+            <option value="all">All years</option>
+            {availableYears.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <TableShell>
+        <table className="data-table audit-table">
           <thead>
             <tr>
               <th>Timestamp</th>
@@ -2510,10 +2549,14 @@ function AuditLogScreen({ bookings, appUser }: { bookings: EnrichedBooking[]; ap
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="py-10 text-center text-sm text-[var(--muted)]">No entries for this period.</td>
+              </tr>
+            ) : rows.map((row, index) => (
               <tr key={`${row.timestamp}-${index}`}>
-                <td className="font-mono text-sm text-[var(--muted)]">{row.timestamp}</td>
-                <td className="font-bold">{row.user}</td>
+                <td className="font-mono text-[var(--muted)]">{row.timestamp}</td>
+                <td className="font-semibold">{row.user}</td>
                 <td><AuditBadge action={row.action} /></td>
                 <td className="text-[var(--muted)]">{row.target}</td>
               </tr>
