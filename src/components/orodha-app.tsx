@@ -7,6 +7,8 @@ import {
   BarChart3,
   CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
   Database,
   FileText,
@@ -20,7 +22,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { eachMonthOfInterval, endOfYear, format, getDaysInMonth, parseISO, startOfYear } from "date-fns";
+import { addMonths, eachMonthOfInterval, endOfYear, format, getDaysInMonth, parseISO, startOfMonth, startOfYear } from "date-fns";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { demoData } from "@/lib/orodha/seed";
 import { deleteRow, fetchCurrentProfile, fetchOrodhaData, fetchProfiles, getCurrentSession, isSupabaseConfigured, signInWithPassword, signOutSupabase, upsertRow } from "@/lib/orodha/supabase";
@@ -1121,18 +1123,47 @@ function CalendarScreen({
   saveBooking: (booking: Booking) => Promise<void>;
   readOnly: boolean;
   }) {
-    const months = eachMonthOfInterval({ start: startOfYear(parseISO(today)), end: endOfYear(parseISO(today)) });
+    const todayDate = startOfMonth(parseISO(today));
+    const [windowStart, setWindowStart] = useState(() => addMonths(todayDate, -2));
+    const months = Array.from({ length: 5 }, (_, i) => addMonths(windowStart, i));
+    const windowEnd = months[months.length - 1];
+    const rangeLabel = format(windowStart, "MMM") === format(windowEnd, "MMM")
+      ? format(windowStart, "MMM yyyy")
+      : format(windowStart, "MMM") + " – " + format(windowEnd, "MMM yyyy");
     const sessions = new Map(data.theatre_sessions.map((session) => [session.session_date, session]));
-  
+
     return (
       <div className="min-h-full">
         <div className="border-b border-[var(--border)] px-7 py-4">
           <PageHeader
             title="Theatre Calendar"
-            subtitle="2026 - Paediatric Surgery Unit"
+            subtitle={`${rangeLabel} · Paediatric Surgery Unit`}
             action={
               <div className="flex items-center gap-3.5">
                 <CalendarLegend />
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setWindowStart((w) => addMonths(w, -1))}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-white text-gray-500 hover:bg-gray-50"
+                    title="Previous month"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    onClick={() => setWindowStart(addMonths(todayDate, -2))}
+                    className="rounded-lg border border-[var(--border)] bg-white px-2.5 py-1 text-xs font-semibold text-gray-500 hover:bg-gray-50"
+                    title="Jump to today"
+                  >
+                    Today
+                  </button>
+                  <button
+                    onClick={() => setWindowStart((w) => addMonths(w, 1))}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-white text-gray-500 hover:bg-gray-50"
+                    title="Next month"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
                 <button
                   className="btn-primary min-h-[2.05rem] px-4.5 py-2 text-[0.9rem] disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={startNewBooking}
