@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# claude code
+.claude/
+
+# word temp files
+~$*.docx
+~WRL*.tmp
+*.docx
+
+# zip assets
+*.zip
