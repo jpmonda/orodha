@@ -1933,27 +1933,41 @@ function EmergencyScreen({
     return true;
   });
 
+  const filterLabel = dateFilter === "today" ? format(new Date(now), "d MMMM yyyy") : dateFilter === "yesterday" ? "Yesterday" : dateFilter === "week" ? "Last 7 days" : "All time";
+
   return (
-    <section className="flex flex-col gap-0">
-      <div className="flex items-center justify-between border-b border-[var(--border)] bg-white px-6 py-4">
+    <section className="flex flex-col gap-0" id="print-area">
+      {/* Print-only header */}
+      <div className="print-only mb-4 border-b border-gray-200 pb-4">
+        <div className="text-[0.7rem] font-semibold uppercase tracking-widest text-gray-400">Paediatric Surgery Unit</div>
+        <h1 className="mt-0.5 text-xl font-bold text-gray-900">Emergency Cases Log</h1>
+        <p className="mt-0.5 text-xs text-gray-500">{filterLabel} · {filtered.length} case{filtered.length !== 1 ? "s" : ""} · Generated {format(new Date(), "d MMMM yyyy, HH:mm")}</p>
+      </div>
+
+      <div className="no-print flex items-center justify-between border-b border-[var(--border)] bg-white px-6 py-4">
         <div>
           <h2 className="text-base font-semibold text-gray-900">Emergency Cases</h2>
           <p className="mt-0.5 text-xs text-gray-500">
-            {filtered.length} case{filtered.length !== 1 ? "s" : ""} · {dateFilter === "today" ? format(new Date(now), "d MMMM yyyy") : dateFilter === "yesterday" ? "Yesterday" : dateFilter === "week" ? "Last 7 days" : "All time"}
+            {filtered.length} case{filtered.length !== 1 ? "s" : ""} · {filterLabel}
           </p>
         </div>
-        {!readOnly && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
-          >
-            <Plus size={15} />
-            Log Emergency
+        <div className="flex items-center gap-2">
+          <button onClick={() => window.print()} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">
+            <Printer size={14} /> Print
           </button>
-        )}
+          {!readOnly && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+            >
+              <Plus size={15} />
+              Log Emergency
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="flex gap-1.5 border-b border-[var(--border)] bg-gray-50/60 px-6 py-2.5">
+      <div className="no-print flex gap-1.5 border-b border-[var(--border)] bg-gray-50/60 px-6 py-2.5">
         {(["today", "yesterday", "week", "all"] as const).map((f) => (
           <button
             key={f}
@@ -1999,7 +2013,9 @@ function EmergencyScreen({
       ) : (
         <div className="divide-y divide-gray-100">
           {filtered.map((eb) => (
-            <EmergencyCard key={eb.id} eb={eb} saveEmergencyBooking={saveEmergencyBooking} readOnly={readOnly} />
+            <div key={eb.id} className="print-row">
+              <EmergencyCard eb={eb} saveEmergencyBooking={saveEmergencyBooking} readOnly={readOnly} />
+            </div>
           ))}
         </div>
       )}
@@ -2452,18 +2468,29 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
   };
 
   return (
-    <section className="flex flex-col gap-6 p-6">
-      <div className="flex items-center justify-between">
+    <section className="flex flex-col gap-6 p-6" id="print-area">
+      {/* Print-only header */}
+      <div className="print-only mb-2 border-b border-gray-200 pb-4">
+        <div className="text-[0.7rem] font-semibold uppercase tracking-widest text-gray-400">Paediatric Surgery Unit</div>
+        <h1 className="mt-0.5 text-xl font-bold text-gray-900">Monthly Reports — {year}</h1>
+        <p className="mt-0.5 text-xs text-gray-500">Generated {format(new Date(), "d MMMM yyyy, HH:mm")}</p>
+      </div>
+      <div className="flex items-center justify-between no-print">
         <PageTitle title="Monthly Reports" />
-        <select
-          value={year}
-          onChange={(e) => setYear(Number(e.target.value))}
-          className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm focus:outline-none"
-        >
-          {allYears.map((y) => (
-            <option key={y} value={y}>{y}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm focus:outline-none"
+          >
+            {allYears.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+          <button onClick={() => window.print()} className="btn-primary flex items-center gap-1.5 px-4 py-2 text-sm">
+            <Printer size={15} /> Print / PDF
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -2495,7 +2522,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
           </thead>
           <tbody className="divide-y divide-gray-50">
             {rows.map(({ label, counts, total, emergency }) => (
-              <tr key={label} className="hover:bg-gray-50/60">
+              <tr key={label} className="print-row hover:bg-gray-50/60">
                 <td className="px-4 py-2.5 font-medium text-gray-700">{label}</td>
                 {statuses.map((s) => (
                   <td key={s} className="px-4 py-2.5 text-center">

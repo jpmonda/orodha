@@ -207,6 +207,10 @@ textarea {
   z-index: 1;
 }
 
+.print-only {
+  display: none;
+}
+
 @media print {
   body * {
     visibility: hidden;
@@ -218,12 +222,14 @@ textarea {
   }
 
   #print-area {
-    position: fixed;
-    inset: 0 auto auto 0;
+    position: static;
     width: 100%;
+    margin: 0;
+    padding: 1.5rem;
     border: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
+    background: white !important;
   }
 
   .print-area {
@@ -233,5 +239,18 @@ textarea {
   .print-case-card {
     break-inside: avoid;
     page-break-inside: avoid;
+  }
+
+  .print-row {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block;
   }
 }
