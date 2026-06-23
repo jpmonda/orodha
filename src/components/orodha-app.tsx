@@ -602,6 +602,24 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
       ? { ...existing, is_blocked: true, block_reason: reason, notes: existing.notes || reason }
       : { ...virtualSession(date, data), id: createId("session"), is_blocked: true, block_reason: reason, notes: reason };
     await upsertCollection("theatre_sessions", "theatre_sessions", session);
+
+    // Auto-postpone all Booked cases on this day
+    if (existing) {
+      const affected = data.bookings.filter(
+        (b) => b.session_id === existing.id && b.booking_status === "Booked",
+      );
+      await Promise.all(
+        affected.map(async (b) => {
+          const postponed: Booking = { ...b, booking_status: "Postponed", postponement_reason: `Theatre day blocked: ${reason}`, updated_at: todayIso() };
+          const surgicalCase = data.surgical_cases.find((c) => c.id === b.case_id);
+          if (surgicalCase) {
+            await upsertCollection("surgical_cases", "surgical_cases", applyCaseStatusFromBooking(postponed, surgicalCase));
+          }
+          await upsertCollection("bookings", "bookings", postponed);
+        }),
+      );
+    }
+
     setBlockingDate(null);
     setBlockReason("");
     setSelectedDate(date);
@@ -809,6 +827,10 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             date={blockingDate}
             reason={blockReason}
             setReason={setBlockReason}
+            affectedCount={(() => {
+              const s = data.theatre_sessions.find((s) => s.session_date === blockingDate);
+              return s ? data.bookings.filter((b) => b.session_id === s.id && b.booking_status === "Booked").length : 0;
+            })()}
             cancel={() => {
               setBlockingDate(null);
               setBlockReason("");
@@ -2926,12 +2948,14 @@ function BlockDayModal({
   date,
   reason,
   setReason,
+  affectedCount,
   cancel,
   confirm,
 }: {
   date: string;
   reason: string;
   setReason: (value: string) => void;
+  affectedCount: number;
   cancel: () => void;
   confirm: () => void;
 }) {
@@ -2940,7 +2964,15 @@ function BlockDayModal({
       <div className="w-full max-w-[560px] rounded-[1.65rem] border border-black/5 bg-white p-8 shadow-[0_18px_48px_rgba(0,0,0,0.16)]">
         <div className="text-[1.15rem] font-bold">Block theatre date</div>
         <div className="mt-1 text-base text-[var(--muted)]">{format(parseISO(date), "EEEE d MMMM")}</div>
-        <div className="mt-7">
+        {affectedCount > 0 && (
+          <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <span className="mt-0.5 text-amber-500">⚠</span>
+            <div className="text-sm text-amber-900">
+              <span className="font-semibold">{affectedCount} booked case{affectedCount > 1 ? "s" : ""}</span> on this day will be automatically postponed.
+            </div>
+          </div>
+        )}
+        <div className="mt-6">
           <Field label="Reason for blocking *">
             <input
               autoFocus
@@ -2953,7 +2985,9 @@ function BlockDayModal({
         </div>
         <div className="mt-6 flex justify-end gap-3 border-t border-[var(--line)] pt-5">
           <button className="btn-secondary px-5" onClick={cancel}>Cancel</button>
-          <button className="rounded-xl bg-[#ef2f2f] px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-[#d82727]" disabled={!reason.trim()} onClick={confirm}>Block date</button>
+          <button className="rounded-xl bg-[#ef2f2f] px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-[#d82727]" disabled={!reason.trim()} onClick={confirm}>
+            {affectedCount > 0 ? `Block & postpone ${affectedCount} case${affectedCount > 1 ? "s" : ""}` : "Block date"}
+          </button>
         </div>
       </div>
     </div>
