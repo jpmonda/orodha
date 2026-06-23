@@ -1604,7 +1604,7 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
         </div>
       </div>
       <div id="print-area" className="max-w-[1036px] overflow-hidden rounded-xl border border-[var(--border)] bg-white">
-        <div className="flex items-start justify-between gap-8 bg-[var(--green-deep)] px-8 py-4 text-white">
+        <div className="flex items-start justify-between gap-8 bg-[var(--green-deep)] px-6 py-3.5 text-white">
           <div className="min-w-0">
             <div className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-[#9cc9aa]">Paediatric Surgery Unit</div>
             <div className="mt-1 text-[1.9rem] font-semibold leading-tight">Daily Theatre List</div>
@@ -1625,16 +1625,16 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
             </div>
           </div>
         </div>
-        <div className="space-y-3.5 p-6 print-area">
+        <div className="space-y-2.5 p-5 print-area">
           {rows.map((booking) => (
-            <div key={booking.id} className="print-case-card rounded-xl border border-[var(--border)] px-6 py-5">
-              <div className="flex items-start gap-4">
-                <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[var(--green-deep)] text-[1.15rem] font-semibold text-white">#{booking.slot}</div>
+            <div key={booking.id} className="print-case-card rounded-xl border border-[var(--border)] px-5 py-3.5">
+              <div className="flex items-start gap-3">
+                <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--green-deep)] text-[0.95rem] font-semibold text-white">#{booking.slot}</div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-[1.55rem] font-semibold leading-tight">{booking.patient.full_name}</div>
-                      <div className="mt-1 text-[0.98rem] text-[var(--muted)]">
+                      <div className="text-[1.2rem] font-semibold leading-tight">{booking.patient.full_name}</div>
+                      <div className="mt-0.5 text-[0.84rem] text-[var(--muted)]">
                         {booking.patient.hospital_number} | {booking.patient.sex} | Age {childAge(booking.patient.date_of_birth, booking.patient.age_text)}
                       </div>
                     </div>
@@ -1645,7 +1645,7 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
                       <StatusBadge status={booking.booking_status} />
                     </div>
                   </div>
-                  <div className="mt-4 grid gap-x-10 gap-y-2.5 md:grid-cols-2">
+                  <div className="mt-2.5 grid gap-x-8 gap-y-1.5 md:grid-cols-2">
                     <CompactInfoRow label="Procedure" value={booking.surgicalCase.procedure_name} />
                     <CompactInfoRow label="Specialty" value={booking.specialty?.name || "-"} />
                     <CompactInfoRow label="Diagnosis" value={booking.surgicalCase.diagnosis || "-"} />
@@ -1653,9 +1653,9 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
                     <CompactInfoRow label="SHA" value={booking.patient.sha_status} />
                   </div>
                   {booking.preop?.preop_notes && (
-                    <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/80 px-4 py-3">
-                      <div className="text-[0.74rem] font-semibold uppercase tracking-[0.1em] text-emerald-800">Pre-op notes</div>
-                      <div className="mt-1 text-[0.96rem] leading-6 text-emerald-950">{booking.preop.preop_notes}</div>
+                    <div className="mt-2.5 rounded-lg border border-emerald-100 bg-emerald-50/80 px-3 py-2">
+                      <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-emerald-800">Pre-op notes</div>
+                      <div className="mt-0.5 text-[0.88rem] leading-5 text-emerald-950">{booking.preop.preop_notes}</div>
                     </div>
                   )}
                 </div>
@@ -1665,7 +1665,7 @@ function TheatreListScreen({ data, bookings, selectedDate, setSelectedDate }: { 
           {Array.from({ length: maxCases }, (_, index) => index + 1)
             .filter((slot) => !rows.some((booking) => booking.slot === slot))
             .map((slot) => (
-              <div key={`empty-${slot}`} className="rounded-xl border border-dashed border-[var(--border)] px-5 py-4 text-[0.82rem] font-semibold uppercase tracking-[0.08em] text-slate-300">
+              <div key={`empty-${slot}`} className="rounded-xl border border-dashed border-[var(--border)] px-4 py-2.5 text-[0.8rem] font-semibold uppercase tracking-[0.08em] text-slate-300">
                 Slot {slot} - available
               </div>
             ))}
