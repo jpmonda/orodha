@@ -101,6 +101,7 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     preop_assessments: preopAssessments.data || [],
     bookings: bookings.data || [],
     case_notes: caseNotes.data || [],
+    emergency_bookings: [],
   } as OrodhaData;
 }
 

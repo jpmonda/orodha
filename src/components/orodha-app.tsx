@@ -4,6 +4,7 @@ import clsx from "clsx";
 import Image from "next/image";
 import {
   ArrowLeft,
+  BarChart3,
   CalendarDays,
   Check,
   Clipboard,
@@ -26,7 +27,10 @@ import { deleteRow, fetchCurrentProfile, fetchOrodhaData, fetchProfiles, getCurr
 import type {
   Booking,
   BookingStatus,
+  EmergencyBooking,
+  EmergencyUrgency,
   EnrichedBooking,
+  EnrichedEmergencyBooking,
   OrodhaData,
   Patient,
   Profile,
@@ -45,7 +49,7 @@ import {
   todayIso,
 } from "@/lib/orodha/utils";
 
-type MainView = "calendar" | "patients" | "lists" | "daily" | "users" | "audit";
+type MainView = "calendar" | "patients" | "lists" | "daily" | "reports" | "users" | "audit";
 type ViewKey = MainView | "new-patient" | "new-booking";
 type BookingStep = "patient" | "details";
 type DemoRole = "Admin" | "Surgeon" | "Anaesthetist";
@@ -86,6 +90,7 @@ const navItems: { key: MainView; label: string; icon: ReactNode }[] = [
   { key: "patients", label: "Patients", icon: <UsersRound /> },
   { key: "lists", label: "Specialty Lists", icon: <Clipboard /> },
   { key: "daily", label: "Theatre List", icon: <Printer /> },
+  { key: "reports", label: "Reports", icon: <BarChart3 /> },
   { key: "users", label: "Admin", icon: <UserCog /> },
   { key: "audit", label: "Audit Log", icon: <FileText /> },
 ];
@@ -277,6 +282,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
   const [bookingSearch, setBookingSearch] = useState("");
   const [selectedSpecialtyId, setSelectedSpecialtyId] = useState("sp-urology");
   const [statusFilter, setStatusFilter] = useState<"All" | "Pending" | "Done" | "Cancelled">("All");
+  const [calendarTab, setCalendarTab] = useState<"elective" | "emergency">("elective");
   const isAdmin = appUser.role === "Admin";
   const readOnly = !isAdmin;
 
@@ -316,6 +322,19 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
   }, [profiles, source]);
 
   const bookings = useMemo(() => enrichBookings(data), [data]);
+  const emergencyBookings = useMemo<EnrichedEmergencyBooking[]>(
+    () =>
+      data.emergency_bookings
+        .map((eb) => {
+          const patient = data.patients.find((p) => p.id === eb.patient_id);
+          if (!patient) return null;
+          const linkedCase = data.surgical_cases.find((c) => c.id === eb.surgical_case_id) || null;
+          return { ...eb, patient, linkedCase };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b!.surgery_date.localeCompare(a!.surgery_date)) as EnrichedEmergencyBooking[],
+    [data],
+  );
   const selectedSession = selectedDate
     ? data.theatre_sessions.find((session) => session.session_date === selectedDate) || virtualSession(selectedDate, data)
     : null;
@@ -374,6 +393,10 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
     }
   }
 
+  async function saveEmergencyBooking(eb: EmergencyBooking) {
+    await upsertCollection("emergency_bookings", "emergency_bookings", eb);
+  }
+
   async function saveProfile(profile: Profile) {
     setProfiles((current) => replaceById(current, { ...profile, updated_at: todayIso() }));
     if (source === "supabase") await upsertRow("profiles", { ...profile, updated_at: todayIso() });
@@ -398,6 +421,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
       const current = source === "supabase" ? (await fetchOrodhaData()) || data : data;
       const deletePlan: [keyof OrodhaData, string][] = [
         ["case_notes", "case_notes"],
+        ["emergency_bookings", "emergency_bookings"],
         ["bookings", "bookings"],
         ["preop_assessments", "preop_assessments"],
         ["surgical_cases", "surgical_cases"],
@@ -419,6 +443,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
         surgical_cases: [],
         preop_assessments: [],
         bookings: [],
+        emergency_bookings: [],
         case_notes: [],
         theatre_sessions: [],
       }));
@@ -619,34 +644,64 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             </div>
           )}
           {contentView === "calendar" && (
-            <CalendarScreen
-              data={data}
-              selectedDate={selectedDate}
-              selectedSession={selectedSession}
-              dayBookings={selectedDayBookings}
-              setSelectedDate={setSelectedDate}
-              closeDayPanel={() => setSelectedDate("")}
-              openBlockDay={(date, reason) => {
-                if (readOnly) {
-                  setNotice(`${appUser.role} access is read-only. Only admins can block theatre days.`);
-                  return;
-                }
-                setBlockingDate(date);
-                setBlockReason(reason || "");
-              }}
-              startNewBooking={() => {
-                if (readOnly) {
-                  setNotice(`${appUser.role} access is read-only. Only admins can create bookings.`);
-                  return;
-                }
-                if (selectedDateIsPast) {
-                  setNotice("The selected theatre day is in the past. Choose today or a future date in the booking form.");
-                }
-                startNewBooking();
-              }}
-              saveBooking={saveBooking}
-              readOnly={readOnly}
-            />
+            <>
+              <div className="flex gap-0 border-b border-[var(--border)] bg-white px-6">
+                {(["elective", "emergency"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setCalendarTab(tab)}
+                    className={clsx(
+                      "border-b-2 px-5 py-3 text-sm font-semibold capitalize transition-colors",
+                      calendarTab === tab
+                        ? tab === "emergency"
+                          ? "border-red-600 text-red-600"
+                          : "border-[var(--green-deep)] text-[var(--green-deep)]"
+                        : "border-transparent text-gray-500 hover:text-gray-800",
+                    )}
+                  >
+                    {tab === "emergency" ? "Emergency" : "Elective"}
+                  </button>
+                ))}
+              </div>
+              {calendarTab === "elective" && (
+                <CalendarScreen
+                  data={data}
+                  selectedDate={selectedDate}
+                  selectedSession={selectedSession}
+                  dayBookings={selectedDayBookings}
+                  setSelectedDate={setSelectedDate}
+                  openBlockDay={(date, reason) => {
+                    if (readOnly) {
+                      setNotice(`${appUser.role} access is read-only. Only admins can block theatre days.`);
+                      return;
+                    }
+                    setBlockingDate(date);
+                    setBlockReason(reason || "");
+                  }}
+                  startNewBooking={() => {
+                    if (readOnly) {
+                      setNotice(`${appUser.role} access is read-only. Only admins can create bookings.`);
+                      return;
+                    }
+                    if (selectedDateIsPast) {
+                      setNotice("The selected theatre day is in the past. Choose today or a future date in the booking form.");
+                    }
+                    startNewBooking();
+                  }}
+                  saveBooking={saveBooking}
+                  readOnly={readOnly}
+                />
+              )}
+              {calendarTab === "emergency" && (
+                <EmergencyScreen
+                  emergencyBookings={emergencyBookings}
+                  patients={data.patients}
+                  surgicalCases={data.surgical_cases}
+                  saveEmergencyBooking={saveEmergencyBooking}
+                  readOnly={readOnly}
+                />
+              )}
+            </>
           )}
           {contentView === "patients" && (
             <PatientsScreen
@@ -685,6 +740,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             />
           )}
           {contentView === "daily" && <TheatreListScreen data={data} bookings={bookings} selectedDate={selectedDate} setSelectedDate={setSelectedDate} />}
+          {contentView === "reports" && <ReportsScreen bookings={bookings} emergencyBookings={emergencyBookings} />}
           {contentView === "users" && isAdmin && (
             <UserManagementScreen
               profiles={profiles}
@@ -700,11 +756,18 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
           {contentView === "audit" && isAdmin && <AuditLogScreen bookings={bookings} appUser={appUser} />}
           {view === "new-patient" && (
             <NewPatientScreen
+              patients={data.patients}
               back={() => setView(previousView)}
               save={async (patient) => {
                 await upsertCollection("patients", "patients", patient);
                 setSelectedPatientId(patient.id);
-                setView("patients");
+                if (previousView === "new-booking") {
+                  setBookingPatientId(patient.id);
+                  setBookingStep("details");
+                  setView("new-booking");
+                } else {
+                  setView("patients");
+                }
               }}
             />
           )}
@@ -1010,18 +1073,18 @@ function Sidebar({ activeView, setView, appUser }: { activeView: MainView; setVi
 
 function TopBar({ appUser, signOut }: { appUser: AppUser; signOut: () => Promise<void> }) {
   return (
-    <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-5 xl:px-9">
-      <div className="text-base font-medium text-[var(--muted)]">Sunday, 26 April 2026</div>
-      <div className="flex items-center gap-5">
-        <div className="relative hidden w-[264px] md:block">
+    <header className="flex h-[54px] shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-5 xl:px-8">
+      <div className="text-[0.88rem] font-medium text-[var(--muted)]">Sunday, 26 April 2026</div>
+      <div className="flex items-center gap-4">
+        <div className="relative hidden w-[252px] md:block">
           <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={16} />
-          <input className="input h-10 text-sm leading-none" style={{ paddingLeft: "2.35rem", paddingRight: "0.8rem" }} placeholder="Search patients, UMR..." />
+          <input className="input h-[2.1rem] text-[0.88rem] leading-none" style={{ paddingLeft: "2.2rem", paddingRight: "0.75rem" }} placeholder="Search patients, UMR..." />
         </div>
         <div className="flex items-center gap-2.5">
           <Avatar appUser={appUser} />
           <div className="hidden leading-tight sm:block">
-            <div className="text-sm font-semibold">{appUser.name}</div>
-            <div className="text-sm text-[var(--muted)]">{appUser.role}</div>
+            <div className="text-[0.88rem] font-semibold">{appUser.name}</div>
+            <div className="text-[0.88rem] text-[var(--muted)]">{appUser.role}</div>
           </div>
           <button className="icon-button" aria-label="Sign out" onClick={signOut} title="Sign out">
             <LogOut size={16} />
@@ -1038,7 +1101,6 @@ function CalendarScreen({
   selectedSession,
   dayBookings,
   setSelectedDate,
-  closeDayPanel,
   openBlockDay,
   startNewBooking,
   saveBooking,
@@ -1049,7 +1111,6 @@ function CalendarScreen({
   selectedSession: TheatreSession | null;
   dayBookings: EnrichedBooking[];
   setSelectedDate: (date: string) => void;
-  closeDayPanel: () => void;
   openBlockDay: (date: string, reason?: string | null) => void;
   startNewBooking: () => void;
   saveBooking: (booking: Booking) => Promise<void>;
@@ -1060,15 +1121,15 @@ function CalendarScreen({
   
     return (
       <div className="min-h-full">
-        <div className="border-b border-[var(--border)] px-7 py-7">
+        <div className="border-b border-[var(--border)] px-7 py-4">
           <PageHeader
             title="Theatre Calendar"
             subtitle="2026 - Paediatric Surgery Unit"
             action={
-              <div className="flex items-center gap-5">
+              <div className="flex items-center gap-3.5">
                 <CalendarLegend />
                 <button
-                  className="btn-primary px-5 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="btn-primary min-h-[2.05rem] px-4.5 py-2 text-[0.9rem] disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={startNewBooking}
                   disabled={readOnly}
                   title={readOnly ? "Only admins can create or edit bookings." : "Create a new booking"}
@@ -1079,58 +1140,57 @@ function CalendarScreen({
             }
           />
         </div>
-        <div className="flex min-h-0">
-          <section className="min-w-0 flex-1">
-            <div className="overflow-x-auto px-7 py-6">
-              <div className="min-w-[952px] space-y-1.5">
-                <div className="grid grid-cols-[88px_repeat(31,minmax(0,1fr))] gap-[0.2rem] pr-1 text-center text-[0.74rem] font-medium text-[var(--muted)]">
-                  <div />
-                  {Array.from({ length: 31 }, (_, index) => <div key={index}>{index + 1}</div>)}
-                </div>
-                {months.map((month) => {
-                  const days = getDaysInMonth(month);
-                  return (
-                    <div key={month.toISOString()} className="grid grid-cols-[88px_repeat(31,minmax(0,1fr))] items-center gap-[0.2rem]">
-                      <div className="text-[0.96rem] font-semibold">{format(month, "MMMM")}</div>
-                      {Array.from({ length: 31 }, (_, index) => {
-                        const day = index + 1;
-                        if (day > days) return <div key={day} className="aspect-square w-full" />;
-                        const dateObject = new Date(2026, month.getMonth(), day);
-                        const date = format(dateObject, "yyyy-MM-dd");
-                        const isWeekend = dateObject.getDay() === 0 || dateObject.getDay() === 6;
-                        const session = sessions.get(date);
-                        const capacity = session ? capacityForSession(data, session) : null;
-                        return (
-                          <button
-                            key={date}
-                            className={clsx("calendar-cell", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
-                            onClick={() => setSelectedDate(date)}
-                            title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : undefined}
-                          >
-                            {session?.is_blocked ? <Lock size={13} /> : capacity?.booked || day}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
+        <section className="min-w-0">
+          <div className="overflow-x-auto px-7 pb-3 pt-4">
+            <div className="mx-auto max-w-[1225px] min-w-[800px] space-y-[0.28rem]">
+              <div className="grid grid-cols-[86px_repeat(31,minmax(0,1fr))] gap-[0.24rem] pr-1 text-center text-[0.64rem] font-medium text-[var(--muted)]">
+                <div />
+                {Array.from({ length: 31 }, (_, index) => <div key={index}>{index + 1}</div>)}
               </div>
+              {months.map((month) => {
+                const days = getDaysInMonth(month);
+                return (
+                  <div key={month.toISOString()} className="grid grid-cols-[86px_repeat(31,minmax(0,1fr))] items-center gap-[0.24rem]">
+                    <div className="pr-2 text-[0.8rem] font-semibold">{format(month, "MMMM")}</div>
+                    {Array.from({ length: 31 }, (_, index) => {
+                      const day = index + 1;
+                      if (day > days) return <div key={day} className="aspect-square w-full" />;
+                      const dateObject = new Date(2026, month.getMonth(), day);
+                      const date = format(dateObject, "yyyy-MM-dd");
+                      const isWeekend = dateObject.getDay() === 0 || dateObject.getDay() === 6;
+                      const session = sessions.get(date);
+                      const capacity = session ? capacityForSession(data, session) : null;
+                      return (
+                        <button
+                          key={date}
+                          className={clsx("calendar-cell", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
+                          onClick={() => setSelectedDate(date)}
+                          title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : undefined}
+                        >
+                          {session?.is_blocked ? <Lock size={13} /> : capacity?.booked || day}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
-          </section>
+          </div>
           {selectedSession && (
-            <DayPanel
-              data={data}
-              selectedDate={selectedDate}
-              session={selectedSession}
-              bookings={dayBookings}
-              close={closeDayPanel}
-              openBlockDay={openBlockDay}
-              startNewBooking={startNewBooking}
-              saveBooking={saveBooking}
-              readOnly={readOnly}
-            />
+            <div className="px-7 pb-4">
+              <DayPanel
+                data={data}
+                selectedDate={selectedDate}
+                session={selectedSession}
+                bookings={dayBookings}
+                openBlockDay={openBlockDay}
+                startNewBooking={startNewBooking}
+                saveBooking={saveBooking}
+                readOnly={readOnly}
+              />
+            </div>
           )}
-        </div>
+        </section>
       </div>
     );
   }
@@ -1140,7 +1200,6 @@ function DayPanel({
   selectedDate,
   session,
   bookings,
-  close,
   openBlockDay,
   startNewBooking,
   saveBooking,
@@ -1150,7 +1209,6 @@ function DayPanel({
   selectedDate: string;
   session: TheatreSession;
   bookings: EnrichedBooking[];
-  close: () => void;
   openBlockDay: (date: string, reason?: string | null) => void;
   startNewBooking: () => void;
   saveBooking: (booking: Booking) => Promise<void>;
@@ -1171,13 +1229,17 @@ function DayPanel({
           ? "All slots are filled for this day."
           : "Book into an available slot";
   return (
-    <aside className="hidden w-[352px] shrink-0 border-l border-[var(--border)] bg-white xl:flex xl:flex-col">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-[var(--border)] px-5 py-5">
+    <section className="overflow-hidden rounded-[1.45rem] border border-[var(--border)] bg-white shadow-[var(--shadow-card)]">
+      <div className="h-1 bg-emerald-700/80" />
+      <div className="grid gap-2.5 border-b border-[var(--border)] px-5 py-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
         <div className="min-w-0">
-          <div className="text-xs font-bold uppercase tracking-[0.06em] text-[var(--muted)]">{format(parseISO(selectedDate), "EEEE")}</div>
-          <div className="mt-1.5 text-[1.48rem] font-bold leading-tight tracking-[-0.02em]">{format(parseISO(selectedDate), "d MMMM yyyy")}</div>
+          <div className="text-[1.12rem] font-bold leading-tight tracking-[-0.02em]">{format(parseISO(selectedDate), "EEEE, d MMMM yyyy")}</div>
+          <div className="mt-0.5 text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">
+            {sessionCapacity.booked}/{session.max_cases} slots booked
+            {session.is_blocked ? " · Blocked day" : ""}
+          </div>
         </div>
-        <div className="flex items-start gap-2 pt-0.5">
+        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
           <button
             className="btn-secondary min-h-[38px] rounded-xl px-3 py-1.5 text-[0.92rem] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => openBlockDay(selectedDate, session.block_reason)}
@@ -1187,18 +1249,6 @@ function DayPanel({
             <Lock size={13} className="text-amber-600" /> Block day
           </button>
           <button
-            className="grid h-[38px] w-[38px] place-items-center rounded-xl border border-[var(--border)] bg-white text-[var(--muted)] transition hover:border-slate-300 hover:text-slate-700"
-            aria-label="Close day panel"
-            onClick={close}
-          >
-            <X size={17} />
-          </button>
-        </div>
-      </div>
-      <div className="scrollbar-soft flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-base font-bold uppercase tracking-[0.04em] text-[var(--muted)]">{sessionCapacity.booked}/{session.max_cases} slots booked</div>
-          <button
             className="rounded-lg border border-emerald-300 px-3 py-1.5 text-sm font-semibold text-[var(--green-mid)] disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
             onClick={startNewBooking}
             disabled={bookSlotDisabled}
@@ -1206,25 +1256,29 @@ function DayPanel({
           >
             <Plus size={14} className="inline-block" /> Book slot
           </button>
+          <button className="btn-secondary min-h-[38px] rounded-xl px-3 py-1.5 text-[0.92rem]" onClick={() => window.print()}>
+            Print Theatre List
+          </button>
         </div>
+      </div>
+      <div className="space-y-3 px-5 py-3">
         {isPast && (
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
             Only today or future dates can have new bookings. This day remains visible for theatre history.
           </div>
         )}
-        {bookings.map((booking) => (
-          <TheatreSlot key={booking.id} booking={booking} saveBooking={saveBooking} readOnly={readOnly || isPast} />
-        ))}
-        {!session.is_blocked &&
-          Array.from({ length: session.max_cases }, (_, index) => {
-            const slot = index + 1;
-            return activeOccupiedSlots.has(slot) ? null : <EmptySlot key={`available-${slot}`} slot={slot} />;
-          })}
+        <div className="grid gap-3 xl:grid-cols-3">
+          {bookings.map((booking) => (
+            <TheatreSlot key={booking.id} booking={booking} saveBooking={saveBooking} readOnly={readOnly || isPast} />
+          ))}
+          {!session.is_blocked &&
+            Array.from({ length: session.max_cases }, (_, index) => {
+              const slot = index + 1;
+              return activeOccupiedSlots.has(slot) ? null : <EmptySlot key={`available-${slot}`} slot={slot} />;
+            })}
+        </div>
       </div>
-      <div className="border-t border-[var(--border)] p-5">
-        <button className="btn-secondary w-full justify-center py-2.5 text-base" onClick={() => window.print()}>Print Theatre List</button>
-      </div>
-    </aside>
+    </section>
   );
 }
 
@@ -1233,21 +1287,28 @@ function TheatreSlot({ booking, saveBooking, readOnly }: { booking: EnrichedBook
   const postponed = booking.booking_status === "Postponed";
   const cancelled = booking.booking_status === "Cancelled";
   const editableBookedCase = booking.booking_status === "Booked";
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
   return (
-    <article className={clsx("rounded-xl border p-4", done ? "border-emerald-200 bg-emerald-50" : postponed ? "border-slate-200 bg-slate-50" : cancelled ? "border-red-200 bg-red-50" : "border-amber-300 bg-amber-50")}>
-      <div className="flex justify-between">
-        <div className="text-xs font-bold uppercase tracking-[0.06em] text-[var(--muted)]">Slot {booking.slot}</div>
-        <StatusBadge status={booking.booking_status} uiPending />
+    <article className={clsx("rounded-xl border px-2.5 pb-2.5 pt-2", done ? "border-emerald-200 bg-emerald-50" : postponed ? "border-slate-200 bg-slate-50" : cancelled ? "border-red-200 bg-red-50" : "border-amber-300 bg-amber-50")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-[0.72rem] font-bold uppercase tracking-[0.06em] text-[var(--muted)]">Slot {booking.slot}</div>
+        <StatusBadge status={booking.booking_status} uiPending compact />
       </div>
-      <div className="mt-3 text-base font-semibold leading-snug">{booking.patient.full_name}</div>
-      <div className="text-sm text-[var(--muted)]">{booking.patient.hospital_number} · {childAge(booking.patient.date_of_birth, booking.patient.age_text)} · {booking.patient.sex}</div>
-      <div className="mt-2 text-[0.95rem] font-medium leading-snug">{booking.surgicalCase.procedure_name}</div>
-      <div className="text-sm text-[var(--muted)]">{booking.specialty?.name} · <span className={booking.surgicalCase.priority === "Urgent" || booking.surgicalCase.priority === "Emergency" ? "font-semibold text-orange-700" : "font-semibold"}>{booking.surgicalCase.priority}</span></div>
-      {booking.preop?.preop_notes && <div className="mt-3 rounded-md bg-black/5 px-3 py-2 text-xs text-[var(--muted)]">{booking.preop.preop_notes}</div>}
-      {!readOnly && editableBookedCase && (
-        <div className="mt-4 grid grid-cols-2 gap-2">
+      <div className="mt-0.5 text-[0.92rem] font-semibold leading-snug">{booking.patient.full_name}</div>
+      <div className="mt-0.5 text-[0.8rem] leading-snug text-[var(--muted)]">{booking.patient.hospital_number} · {childAge(booking.patient.date_of_birth, booking.patient.age_text)} · {booking.patient.sex}</div>
+      <div className="mt-1 text-[0.87rem] font-medium leading-snug">{booking.surgicalCase.procedure_name}</div>
+      <div className="text-[0.8rem] leading-snug text-[var(--muted)]">{booking.specialty?.name} · <span className={booking.surgicalCase.priority === "Urgent" || booking.surgicalCase.priority === "Emergency" ? "font-semibold text-orange-700" : "font-semibold"}>{booking.surgicalCase.priority}</span></div>
+      {booking.preop?.preop_notes && <div className="mt-2 rounded-md bg-black/5 px-2.5 py-1.5 text-[0.72rem] leading-snug text-[var(--muted)]">{booking.preop.preop_notes}</div>}
+      {cancelled && booking.cancellation_reason && (
+        <div className="mt-2 rounded-md border border-red-200 bg-red-100/60 px-2.5 py-1.5 text-[0.72rem] leading-snug text-red-800">
+          <span className="font-semibold">Reason:</span> {booking.cancellation_reason}
+        </div>
+      )}
+      {!readOnly && editableBookedCase && !confirmingCancel && (
+        <div className="mt-2.5 grid grid-cols-2 gap-2">
           <button
-            className="rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-sm font-semibold text-emerald-800"
+            className="rounded-lg border border-emerald-200 bg-emerald-50 py-1.25 text-[0.8rem] font-semibold text-emerald-800"
             onClick={() => {
               void saveBooking({ ...booking, booking_status: "Done", updated_at: todayIso() }).catch((error) => {
                 window.alert(error instanceof Error ? error.message : "Could not mark booking done.");
@@ -1257,15 +1318,50 @@ function TheatreSlot({ booking, saveBooking, readOnly }: { booking: EnrichedBook
             ✓ Mark Done
           </button>
           <button
-            className="rounded-lg border border-red-200 bg-red-50 py-2 text-sm font-semibold text-red-800"
-            onClick={() => {
-              void saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: "Cancelled from day panel", updated_at: todayIso() }).catch((error) => {
-                window.alert(error instanceof Error ? error.message : "Could not cancel booking.");
-              });
-            }}
+            className="rounded-lg border border-red-200 bg-red-50 py-1.25 text-[0.8rem] font-semibold text-red-800"
+            onClick={() => setConfirmingCancel(true)}
           >
             × Cancel
           </button>
+        </div>
+      )}
+      {!readOnly && editableBookedCase && confirmingCancel && (
+        <div className="mt-2.5 space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5">
+          <label className="block text-[0.72rem] font-semibold text-red-800">Reason for cancellation *</label>
+          <textarea
+            className="input min-h-[3rem] w-full text-[0.8rem]"
+            value={cancelReason}
+            onChange={(event) => setCancelReason(event.target.value)}
+            placeholder="e.g. Patient unwell, list overran, consent withdrawn"
+            autoFocus
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="rounded-lg border border-slate-200 bg-white py-1.25 text-[0.8rem] font-semibold text-slate-700"
+              onClick={() => {
+                setConfirmingCancel(false);
+                setCancelReason("");
+              }}
+            >
+              Keep booking
+            </button>
+            <button
+              className="rounded-lg border border-red-300 bg-red-100 py-1.25 text-[0.8rem] font-semibold text-red-800 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!cancelReason.trim()}
+              onClick={() => {
+                void saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: cancelReason.trim(), updated_at: todayIso() })
+                  .then(() => {
+                    setConfirmingCancel(false);
+                    setCancelReason("");
+                  })
+                  .catch((error) => {
+                    window.alert(error instanceof Error ? error.message : "Could not cancel booking.");
+                  });
+              }}
+            >
+              Confirm cancellation
+            </button>
+          </div>
         </div>
       )}
     </article>
@@ -1739,6 +1835,525 @@ function UserManagementScreen({
   );
 }
 
+const urgencyColors: Record<EmergencyUrgency, string> = {
+  P1: "bg-red-100 text-red-700 border-red-200",
+  P2: "bg-orange-100 text-orange-700 border-orange-200",
+  P3: "bg-amber-100 text-amber-700 border-amber-200",
+};
+const urgencyLabel: Record<EmergencyUrgency, string> = {
+  P1: "Immediate",
+  P2: "Within 4 hrs",
+  P3: "Within 24 hrs",
+};
+
+function EmergencyScreen({
+  emergencyBookings,
+  patients,
+  surgicalCases,
+  saveEmergencyBooking,
+  readOnly,
+}: {
+  emergencyBookings: EnrichedEmergencyBooking[];
+  patients: Patient[];
+  surgicalCases: SurgicalCase[];
+  saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  readOnly: boolean;
+}) {
+  const [dateFilter, setDateFilter] = useState<"today" | "yesterday" | "week" | "all">("today");
+  const [showForm, setShowForm] = useState(false);
+
+  const now = todayInNairobi();
+  const yesterday = format(new Date(new Date(now).getTime() - 86400000), "yyyy-MM-dd");
+  const weekStart = format(new Date(new Date(now).getTime() - 6 * 86400000), "yyyy-MM-dd");
+
+  const filtered = emergencyBookings.filter((e) => {
+    if (dateFilter === "today") return e.surgery_date === now;
+    if (dateFilter === "yesterday") return e.surgery_date === yesterday;
+    if (dateFilter === "week") return e.surgery_date >= weekStart && e.surgery_date <= now;
+    return true;
+  });
+
+  return (
+    <section className="flex flex-col gap-0">
+      <div className="flex items-center justify-between border-b border-[var(--border)] bg-white px-6 py-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Emergency Cases</h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            {filtered.length} case{filtered.length !== 1 ? "s" : ""} · {dateFilter === "today" ? format(new Date(now), "d MMMM yyyy") : dateFilter === "yesterday" ? "Yesterday" : dateFilter === "week" ? "Last 7 days" : "All time"}
+          </p>
+        </div>
+        {!readOnly && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+          >
+            <Plus size={15} />
+            Log Emergency
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-1.5 border-b border-[var(--border)] bg-gray-50/60 px-6 py-2.5">
+        {(["today", "yesterday", "week", "all"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setDateFilter(f)}
+            className={clsx(
+              "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+              dateFilter === f
+                ? "bg-[var(--green-deep)] text-white"
+                : "bg-white text-gray-500 hover:text-gray-800 border border-gray-200",
+            )}
+          >
+            {f === "today" ? "Today" : f === "yesterday" ? "Yesterday" : f === "week" ? "This week" : "All"}
+          </button>
+        ))}
+      </div>
+
+      {showForm && (
+        <EmergencyForm
+          patients={patients}
+          surgicalCases={surgicalCases}
+          defaultDate={now}
+          onSave={async (eb) => {
+            await saveEmergencyBooking(eb);
+            setShowForm(false);
+          }}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-16 text-gray-400">
+          <div className="text-3xl">🚑</div>
+          <p className="text-sm font-medium">No emergency cases for this period</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {filtered.map((eb) => (
+            <EmergencyCard key={eb.id} eb={eb} saveEmergencyBooking={saveEmergencyBooking} readOnly={readOnly} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EmergencyCard({
+  eb,
+  saveEmergencyBooking,
+  readOnly,
+}: {
+  eb: EnrichedEmergencyBooking;
+  saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  readOnly: boolean;
+}) {
+  const done = eb.booking_status === "Done";
+  const cancelled = eb.booking_status === "Cancelled";
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+
+  return (
+    <div className={clsx("flex gap-3 px-6 py-4", (done || cancelled) && "opacity-70")}>
+      <div className={clsx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[11px] font-black", urgencyColors[eb.urgency])}>
+        {eb.urgency}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="font-semibold text-gray-900 text-sm">{eb.patient.full_name} · {eb.patient.hospital_number}</p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {eb.procedure_notes} · {eb.surgeon}
+              {eb.surgery_time && <> · <span className="font-medium">{eb.surgery_time}</span></>}
+            </p>
+            <p className="mt-0.5 text-[11px] text-gray-400">{format(parseISO(eb.surgery_date), "EEE, d MMM yyyy")} · {urgencyLabel[eb.urgency]}</p>
+            {eb.indication && (
+              <p className="mt-1 text-xs text-gray-500 italic">{eb.indication}</p>
+            )}
+            {cancelled && eb.cancellation_reason && (
+              <div className="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[0.72rem] text-red-800">
+                <span className="font-semibold">Reason:</span> {eb.cancellation_reason}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <StatusBadge status={eb.booking_status} compact />
+            {!readOnly && !done && !cancelled && (
+              <div className="flex gap-1">
+                <button
+                  onClick={() => void saveEmergencyBooking({ ...eb, booking_status: "Done", updated_at: todayIso() })}
+                  className="rounded px-2 py-1 text-xs font-semibold text-green-700 hover:bg-green-50"
+                >
+                  Mark Done
+                </button>
+                <button
+                  onClick={() => setConfirmingCancel(true)}
+                  className="rounded px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        {confirmingCancel && (
+          <div className="mt-2 space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5">
+            <p className="text-xs font-semibold text-red-800">Reason for cancellation *</p>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              rows={2}
+              placeholder="Enter reason..."
+              className="w-full rounded border border-red-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 focus:outline-none"
+            />
+            <div className="flex gap-2">
+              <button onClick={() => { setConfirmingCancel(false); setCancelReason(""); }} className="rounded bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100">
+                Keep
+              </button>
+              <button
+                disabled={!cancelReason.trim()}
+                onClick={() => void saveEmergencyBooking({ ...eb, booking_status: "Cancelled", cancellation_reason: cancelReason.trim(), updated_at: todayIso() })}
+                className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-40 hover:bg-red-700"
+              >
+                Confirm cancellation
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmergencyForm({
+  patients,
+  surgicalCases,
+  defaultDate,
+  onSave,
+  onCancel,
+}: {
+  patients: Patient[];
+  surgicalCases: SurgicalCase[];
+  defaultDate: string;
+  onSave: (eb: EmergencyBooking) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [urgency, setUrgency] = useState<EmergencyUrgency>("P2");
+  const [patientId, setPatientId] = useState("");
+  const [patientQuery, setPatientQuery] = useState("");
+  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
+  const [procedureQuery, setProcedureQuery] = useState("");
+  const [linkedCaseId, setLinkedCaseId] = useState<string | null>(null);
+  const [showProcedureDropdown, setShowProcedureDropdown] = useState(false);
+  const [surgeon, setSurgeon] = useState("");
+  const [surgeryDate, setSurgeryDate] = useState(defaultDate);
+  const [surgeryTime, setSurgeryTime] = useState("");
+  const [indication, setIndication] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const filteredPatients = patientQuery.trim().length > 0
+    ? patients.filter((p) =>
+        p.full_name.toLowerCase().includes(patientQuery.toLowerCase()) ||
+        p.hospital_number.toLowerCase().includes(patientQuery.toLowerCase())
+      ).slice(0, 6)
+    : [];
+
+  const patientCases = patientId
+    ? surgicalCases.filter((c) => c.patient_id === patientId)
+    : surgicalCases;
+
+  const filteredCases = procedureQuery.trim().length > 1
+    ? patientCases.filter((c) => c.procedure_name.toLowerCase().includes(procedureQuery.toLowerCase())).slice(0, 5)
+    : [];
+
+  const canSave = patientId && procedureQuery.trim() && surgeon.trim() && surgeryDate;
+
+  async function handleSave() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await onSave({
+        id: createId("emg"),
+        patient_id: patientId,
+        surgical_case_id: linkedCaseId,
+        procedure_notes: procedureQuery.trim(),
+        surgeon: surgeon.trim(),
+        urgency,
+        booking_status: "Booked",
+        surgery_date: surgeryDate,
+        surgery_time: surgeryTime.trim() || null,
+        indication: indication.trim() || null,
+        cancellation_reason: null,
+        created_at: todayIso(),
+        updated_at: todayIso(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="border-b border-[var(--border)] bg-gray-50/60 px-6 py-5">
+      <p className="mb-4 text-sm font-semibold text-gray-800">Log Emergency Case</p>
+
+      {/* Urgency */}
+      <div className="mb-4">
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Urgency</p>
+        <div className="flex gap-2">
+          {(["P1", "P2", "P3"] as EmergencyUrgency[]).map((u) => (
+            <button
+              key={u}
+              onClick={() => setUrgency(u)}
+              className={clsx(
+                "flex-1 rounded-lg border-2 py-2 text-center transition-colors",
+                urgency === u ? urgencyColors[u] + " border-current" : "border-gray-200 bg-white text-gray-400 hover:border-gray-300",
+              )}
+            >
+              <div className="text-xs font-black">{u}</div>
+              <div className="text-[10px] mt-0.5 opacity-75">{urgencyLabel[u]}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Patient */}
+      <div className="mb-3 relative">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Patient</label>
+        {patientId ? (
+          <div className="flex items-center justify-between rounded-lg border border-[var(--green-deep)] bg-green-50 px-3 py-2">
+            <span className="text-sm font-medium text-gray-800">{patients.find((p) => p.id === patientId)?.full_name}</span>
+            <button onClick={() => { setPatientId(""); setPatientQuery(""); }} className="text-xs text-gray-400 hover:text-gray-600"><X size={13} /></button>
+          </div>
+        ) : (
+          <>
+            <input
+              value={patientQuery}
+              onChange={(e) => { setPatientQuery(e.target.value); setShowPatientDropdown(true); }}
+              onFocus={() => setShowPatientDropdown(true)}
+              placeholder="Search by name or UMR..."
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]"
+            />
+            {showPatientDropdown && filteredPatients.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg">
+                {filteredPatients.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => { setPatientId(p.id); setPatientQuery(p.full_name); setShowPatientDropdown(false); }}
+                    className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-gray-50"
+                  >
+                    <span className="font-medium">{p.full_name}</span>
+                    <span className="text-xs text-gray-400">{p.hospital_number}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Procedure */}
+      <div className="mb-3 relative">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          Procedure
+          {linkedCaseId && <span className="ml-2 rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">linked</span>}
+        </label>
+        <input
+          value={procedureQuery}
+          onChange={(e) => { setProcedureQuery(e.target.value); setLinkedCaseId(null); setShowProcedureDropdown(true); }}
+          onFocus={() => setShowProcedureDropdown(true)}
+          placeholder="Type procedure name or search existing cases..."
+          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]"
+        />
+        {showProcedureDropdown && filteredCases.length > 0 && (
+          <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg">
+            {filteredCases.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => { setProcedureQuery(c.procedure_name); setLinkedCaseId(c.id); setShowProcedureDropdown(false); }}
+                className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-gray-50"
+              >
+                <span className="font-medium">{c.procedure_name}</span>
+                <span className="text-xs text-gray-400">{c.diagnosis || "No diagnosis recorded"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Surgeon + Date + Time */}
+      <div className="mb-3 grid grid-cols-3 gap-3">
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Surgeon</label>
+          <input value={surgeon} onChange={(e) => setSurgeon(e.target.value)} placeholder="Dr. …" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Date</label>
+          <input type="date" value={surgeryDate} onChange={(e) => setSurgeryDate(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Time (optional)</label>
+          <input type="time" value={surgeryTime} onChange={(e) => setSurgeryTime(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        </div>
+      </div>
+
+      {/* Indication */}
+      <div className="mb-4">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Indication / Notes (optional)</label>
+        <textarea value={indication} onChange={(e) => setIndication(e.target.value)} rows={2} placeholder="Brief clinical indication…" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+        <button
+          disabled={!canSave || saving}
+          onClick={() => void handleSave()}
+          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 hover:bg-red-700"
+        >
+          {saving ? "Saving…" : "Log Case"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBooking[]; emergencyBookings: EnrichedEmergencyBooking[] }) {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+
+  const months = eachMonthOfInterval({
+    start: startOfYear(new Date(year, 0, 1)),
+    end: endOfYear(new Date(year, 0, 1)),
+  });
+
+  const allYears = Array.from(
+    new Set([
+      ...bookings.map((b) => parseISO(b.session.session_date).getFullYear()),
+      ...emergencyBookings.map((e) => parseISO(e.surgery_date).getFullYear()),
+    ])
+  ).sort((a, b) => b - a);
+  if (!allYears.includes(today.getFullYear())) allYears.unshift(today.getFullYear());
+
+  const statuses: BookingStatus[] = ["Booked", "Done", "Cancelled", "Postponed", "No-show"];
+
+  const rows = months.map((month) => {
+    const label = format(month, "MMMM");
+    const key = format(month, "yyyy-MM");
+    const monthBookings = bookings.filter(
+      (b) => format(parseISO(b.session.session_date), "yyyy-MM") === key
+    );
+    const monthEmergency = emergencyBookings.filter(
+      (e) => format(parseISO(e.surgery_date), "yyyy-MM") === key
+    );
+    const counts = Object.fromEntries(
+      statuses.map((s) => [s, monthBookings.filter((b) => b.booking_status === s).length])
+    ) as Record<BookingStatus, number>;
+    const total = monthBookings.length;
+    const emergency = monthEmergency.length;
+    return { label, counts, total, emergency };
+  });
+
+  const totals = Object.fromEntries(
+    statuses.map((s) => [s, rows.reduce((sum, r) => sum + r.counts[s], 0)])
+  ) as Record<BookingStatus, number>;
+  const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
+  const totalEmergency = rows.reduce((sum, r) => sum + r.emergency, 0);
+
+  const statusColors: Record<BookingStatus, string> = {
+    Booked: "bg-blue-100 text-blue-800",
+    Done: "bg-green-100 text-green-800",
+    Cancelled: "bg-red-100 text-red-800",
+    Postponed: "bg-amber-100 text-amber-800",
+    "No-show": "bg-gray-100 text-gray-600",
+  };
+
+  return (
+    <section className="flex flex-col gap-6 p-6">
+      <div className="flex items-center justify-between">
+        <PageTitle title="Monthly Reports" />
+        <select
+          value={year}
+          onChange={(e) => setYear(Number(e.target.value))}
+          className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm focus:outline-none"
+        >
+          {allYears.map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+        {statuses.map((s) => (
+          <div key={s} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium text-gray-500">{s}</p>
+            <p className="mt-1 text-2xl font-bold text-gray-900">{totals[s]}</p>
+          </div>
+        ))}
+        <div className="rounded-xl border border-red-100 bg-red-50 p-4 shadow-sm">
+          <p className="text-xs font-medium text-red-500">Emergency</p>
+          <p className="mt-1 text-2xl font-bold text-red-700">{totalEmergency}</p>
+        </div>
+      </div>
+
+      {/* Monthly breakdown table */}
+      <TableShell>
+        <table className="min-w-full divide-y divide-gray-100 text-sm">
+          <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <tr>
+              <th className="px-4 py-3 text-left">Month</th>
+              {statuses.map((s) => (
+                <th key={s} className="px-4 py-3 text-center">{s}</th>
+              ))}
+              <th className="px-4 py-3 text-center text-red-500">Emergency</th>
+              <th className="px-4 py-3 text-center">Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {rows.map(({ label, counts, total, emergency }) => (
+              <tr key={label} className="hover:bg-gray-50/60">
+                <td className="px-4 py-2.5 font-medium text-gray-700">{label}</td>
+                {statuses.map((s) => (
+                  <td key={s} className="px-4 py-2.5 text-center">
+                    {counts[s] > 0 ? (
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[s]}`}>
+                        {counts[s]}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+                ))}
+                <td className="px-4 py-2.5 text-center">
+                  {emergency > 0 ? (
+                    <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                      {emergency}
+                    </span>
+                  ) : (
+                    <span className="text-gray-300">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-center font-semibold text-gray-800">
+                  {(total + emergency) > 0 ? total + emergency : <span className="text-gray-300">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot className="border-t-2 border-gray-200 bg-gray-50 text-xs font-bold uppercase tracking-wide text-gray-600">
+            <tr>
+              <td className="px-4 py-2.5">Total</td>
+              {statuses.map((s) => (
+                <td key={s} className="px-4 py-2.5 text-center">{totals[s] || "—"}</td>
+              ))}
+              <td className="px-4 py-2.5 text-center text-red-600">{totalEmergency || "—"}</td>
+              <td className="px-4 py-2.5 text-center">{(grandTotal + totalEmergency) || "—"}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </TableShell>
+    </section>
+  );
+}
+
 function AuditLogScreen({ bookings, appUser }: { bookings: EnrichedBooking[]; appUser: AppUser }) {
   const rows = [
     ...bookings.slice(0, 8).map((booking) => ({
@@ -1778,14 +2393,20 @@ function AuditLogScreen({ bookings, appUser }: { bookings: EnrichedBooking[]; ap
   );
 }
 
-function NewPatientScreen({ back, save }: { back: () => void; save: (patient: Patient) => Promise<void> }) {
+function NewPatientScreen({ back, save, patients }: { back: () => void; save: (patient: Patient) => Promise<void>; patients: Patient[] }) {
+  const [hospitalNumber, setHospitalNumber] = useState("");
+  const [fullName, setFullName] = useState("");
+  const normalizedUmr = hospitalNumber.trim().toUpperCase();
+  const umrDuplicate = normalizedUmr ? patients.find((patient) => patient.hospital_number.trim().toUpperCase() === normalizedUmr) || null : null;
+  const duplicateNameMatches = umrDuplicate ? umrDuplicate.full_name.trim().toLowerCase() === fullName.trim().toLowerCase() : false;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (umrDuplicate) return;
     const form = new FormData(event.currentTarget);
     const patient: Patient = {
       id: createId("patient"),
-      hospital_number: String(form.get("hospital_number") || "").toUpperCase(),
-      full_name: String(form.get("full_name") || ""),
+      hospital_number: normalizedUmr,
+      full_name: fullName,
       sex: String(form.get("sex") || "Unknown") as Sex,
       date_of_birth: String(form.get("date_of_birth") || "") || null,
       age_text: null,
@@ -1806,10 +2427,19 @@ function NewPatientScreen({ back, save }: { back: () => void; save: (patient: Pa
       <form onSubmit={submit} className="mt-10 max-w-[930px] rounded-2xl border border-[var(--border)] bg-white p-11 shadow-[var(--shadow-card)]">
         <div className="grid gap-x-5 gap-y-5 md:grid-cols-2">
           <Field label="UMR *" className="md:col-span-2">
-            <input className="input" name="hospital_number" placeholder="UMR048215" pattern="UMR[0-9]{4,7}" required />
+            <input className="input" name="hospital_number" placeholder="UMR048215" pattern="UMR[0-9]{4,7}" required value={hospitalNumber} onChange={(event) => setHospitalNumber(event.target.value.toUpperCase())} aria-invalid={Boolean(umrDuplicate)} />
             <div className="mt-1 text-sm text-[var(--muted)]">Format: UMR + 4-7 digits, uppercase</div>
+            {umrDuplicate && (
+              <div className={clsx("mt-2 rounded-lg border px-3 py-2 text-sm leading-snug", duplicateNameMatches ? "border-amber-300 bg-amber-50 text-amber-900" : "border-red-300 bg-red-50 text-red-900")}>
+                {duplicateNameMatches ? (
+                  <><span className="font-semibold">{normalizedUmr}</span> already belongs to <span className="font-semibold">{umrDuplicate.full_name}</span> — this looks like the same patient. Go back and open the existing record instead of creating a duplicate.</>
+                ) : (
+                  <><span className="font-semibold">{normalizedUmr}</span> is already registered to <span className="font-semibold">{umrDuplicate.full_name}</span>, which does not match the name entered. UMRs must be unique — please re-check the number.</>
+                )}
+              </div>
+            )}
           </Field>
-          <Field label="Full name *" className="md:col-span-2"><input className="input" name="full_name" placeholder="Patient's full name" required /></Field>
+          <Field label="Full name *" className="md:col-span-2"><input className="input" name="full_name" placeholder="Patient's full name" required value={fullName} onChange={(event) => setFullName(event.target.value)} /></Field>
           <Field label="Sex *"><SelectBare name="sex" options={sexOptions} /></Field>
           <Field label="Date of birth *"><input className="input" type="date" name="date_of_birth" required /></Field>
           <Field label="Primary phone *"><input className="input" name="phone_primary" placeholder="0712 345 678" required /></Field>
@@ -1818,7 +2448,7 @@ function NewPatientScreen({ back, save }: { back: () => void; save: (patient: Pa
           <Field label="SHA status"><SelectBare name="sha_status" options={shaOptions} defaultValue="Active" /></Field>
         </div>
         <div className="mt-8 flex justify-end border-t border-[var(--border)] pt-7">
-          <button className="btn-primary px-6 text-lg" type="submit">Save patient record</button>
+          <button className="btn-primary px-6 text-lg disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={Boolean(umrDuplicate)} title={umrDuplicate ? "This UMR already exists" : undefined}>Save patient record</button>
         </div>
       </form>
     </section>
@@ -2071,8 +2701,8 @@ function PageHeader({ title, subtitle, action }: { title: string; subtitle?: str
 function PageTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <div>
-      <h1 className="text-[1.6rem] font-bold leading-tight">{title}</h1>
-      {subtitle && <p className="mt-1 text-base text-[var(--muted)]">{subtitle}</p>}
+      <h1 className="text-[1.5rem] font-bold leading-tight">{title}</h1>
+      {subtitle && <p className="mt-0.5 text-[0.95rem] text-[var(--muted)]">{subtitle}</p>}
     </div>
   );
 }
@@ -2135,7 +2765,7 @@ function SearchInput({ value, onChange, placeholder, className }: { value: strin
 
 function CalendarLegend() {
   return (
-    <div className="hidden items-center gap-3 text-[var(--muted)] xl:flex">
+    <div className="hidden items-center gap-2.5 text-[0.9rem] text-[var(--muted)] xl:flex">
       <Legend color="bg-emerald-100 border-emerald-200" label="1" />
       <Legend color="bg-amber-100 border-amber-200" label="2" />
       <Legend color="bg-red-100 border-red-200" label="Full" />
@@ -2145,7 +2775,7 @@ function CalendarLegend() {
 }
 
 function Legend({ color, label }: { color: string; label: string }) {
-  return <span className="inline-flex items-center gap-2"><span className={clsx("size-5 rounded border", color)} />{label}</span>;
+  return <span className="inline-flex items-center gap-1.5"><span className={clsx("h-[1.125rem] w-[1.125rem] rounded border", color)} />{label}</span>;
 }
 
 function Avatar({ appUser }: { appUser: AppUser }) {
@@ -2178,18 +2808,18 @@ function SelectBare({
   );
 }
 
-function StatusBadge({ status, uiPending }: { status: BookingStatus; uiPending?: boolean }) {
+function StatusBadge({ status, uiPending, compact }: { status: BookingStatus; uiPending?: boolean; compact?: boolean }) {
   const label = uiPending && status === "Booked" ? "Pending" : status;
   const tone = status === "Done" ? "green" : status === "Cancelled" || status === "No-show" ? "red" : status === "Postponed" ? "slate" : "amber";
-  return <Badge tone={tone}>{label}</Badge>;
+  return compact ? <Badge tone={tone} compact>{label}</Badge> : <Badge tone={tone}>{label}</Badge>;
 }
 
 function ShaBadge({ status }: { status: ShaStatus }) {
   return <Badge tone={status === "Active" ? "green" : "slate"}>{status}</Badge>;
 }
 
-function Badge({ tone, children }: { tone: "green" | "amber" | "red" | "slate" | "blue"; children: ReactNode }) {
-  return <span className={clsx("inline-flex rounded-md px-3 py-1 text-sm font-bold", badgeClass(tone))}>{children}</span>;
+function Badge({ tone, children, compact }: { tone: "green" | "amber" | "red" | "slate" | "blue"; children: ReactNode; compact?: boolean }) {
+  return <span className={clsx("inline-flex rounded-md font-bold", compact ? "px-2.5 py-0.5 text-[0.78rem]" : "px-3 py-1 text-sm", badgeClass(tone))}>{children}</span>;
 }
 
 function AuditBadge({ action }: { action: string }) {
@@ -2229,7 +2859,7 @@ function CompactInfoRow({ label, value }: { label: string; value: string }) {
 }
 
 function EmptySlot({ slot }: { slot: number }) {
-  return <div className="rounded-xl border border-dashed border-[var(--border)] p-5 text-[var(--muted)]">Slot {slot} - available</div>;
+  return <div className="rounded-xl border border-dashed border-[var(--border)] p-4 text-[0.9rem] text-[var(--muted)]">Slot {slot} - available</div>;
 }
 
 const capacityBookingStatuses: BookingStatus[] = ["Booked", "Done", "No-show"];

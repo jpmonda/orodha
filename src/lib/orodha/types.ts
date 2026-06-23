@@ -15,6 +15,8 @@ export type CaseStatus =
 
 export type BookingStatus = "Booked" | "Done" | "Postponed" | "Cancelled" | "No-show";
 
+export type EmergencyUrgency = "P1" | "P2" | "P3";
+
 export type ReadinessStatus = "Not assessed" | "Pending" | "Cleared" | "Not cleared";
 
 export type ShaStatus = "Active" | "Inactive" | "Unknown";
@@ -130,6 +132,27 @@ export interface Booking {
   updated_at: string;
 }
 
+export interface EmergencyBooking {
+  id: string;
+  patient_id: string;
+  surgical_case_id: string | null;
+  procedure_notes: string;
+  surgeon: string;
+  urgency: EmergencyUrgency;
+  booking_status: BookingStatus;
+  surgery_date: string;
+  surgery_time: string | null;
+  indication: string | null;
+  cancellation_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EnrichedEmergencyBooking extends EmergencyBooking {
+  patient: Patient;
+  linkedCase: SurgicalCase | null;
+}
+
 export interface CaseNote {
   id: string;
   case_id: string;
@@ -148,6 +171,7 @@ export interface OrodhaData {
   preop_assessments: PreopAssessment[];
   bookings: Booking[];
   case_notes: CaseNote[];
+  emergency_bookings: EmergencyBooking[];
 }
 
 export interface Profile {
