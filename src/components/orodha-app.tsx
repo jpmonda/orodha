@@ -675,6 +675,10 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
                       setNotice(`${appUser.role} access is read-only. Only admins can block theatre days.`);
                       return;
                     }
+                    if (isPastTheatreDate(date)) {
+                      setNotice("Past theatre days cannot be blocked.");
+                      return;
+                    }
                     setBlockingDate(date);
                     setBlockReason(reason || "");
                   }}
@@ -1243,8 +1247,8 @@ function DayPanel({
           <button
             className="btn-secondary min-h-[38px] rounded-xl px-3 py-1.5 text-[0.92rem] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => openBlockDay(selectedDate, session.block_reason)}
-            disabled={readOnly}
-            title={readOnly ? "Only admins can block theatre days." : "Block this theatre day"}
+            disabled={readOnly || isPast}
+            title={readOnly ? "Only admins can block theatre days." : isPast ? "Cannot block a past theatre day." : "Block this theatre day"}
           >
             <Lock size={13} className="text-amber-600" /> Block day
           </button>
@@ -1507,10 +1511,10 @@ function SpecialtyListsScreen({
   return (
     <section className="px-10 py-12">
       <PageHeader title="Specialty Lists" subtitle="All bookings by surgical specialty" />
-      <div className="mt-8 flex flex-wrap gap-3">
+      <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
         {data.specialties.map((specialty) => (
-          <button key={specialty.id} className={clsx("rounded-full border px-5 py-2 font-semibold", specialty.id === selectedSpecialtyId ? "border-[var(--green-accent)] bg-[var(--green-deep)] text-white" : "border-[var(--border)] bg-white")} onClick={() => setSelectedSpecialtyId(specialty.id)}>
-            {specialty.name} <span className="text-sm opacity-70">{bookings.filter((booking) => booking.surgicalCase.specialty_id === specialty.id).length}</span>
+          <button key={specialty.id} className={clsx("shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-semibold whitespace-nowrap", specialty.id === selectedSpecialtyId ? "border-[var(--green-accent)] bg-[var(--green-deep)] text-white" : "border-[var(--border)] bg-white")} onClick={() => setSelectedSpecialtyId(specialty.id)}>
+            {specialty.name} <span className="opacity-70">{bookings.filter((booking) => booking.surgicalCase.specialty_id === specialty.id).length}</span>
           </button>
         ))}
       </div>
