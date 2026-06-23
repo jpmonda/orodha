@@ -702,6 +702,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
                   patients={data.patients}
                   surgicalCases={data.surgical_cases}
                   saveEmergencyBooking={saveEmergencyBooking}
+                  savePatient={async (p) => { await upsertCollection("patients", "patients", p); }}
                   readOnly={readOnly}
                 />
               )}
@@ -1855,12 +1856,14 @@ function EmergencyScreen({
   patients,
   surgicalCases,
   saveEmergencyBooking,
+  savePatient,
   readOnly,
 }: {
   emergencyBookings: EnrichedEmergencyBooking[];
   patients: Patient[];
   surgicalCases: SurgicalCase[];
   saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  savePatient: (p: Patient) => Promise<void>;
   readOnly: boolean;
 }) {
   const [dateFilter, setDateFilter] = useState<"today" | "yesterday" | "week" | "all">("today");
@@ -1928,6 +1931,7 @@ function EmergencyScreen({
                 await saveEmergencyBooking(eb);
                 setShowForm(false);
               }}
+              onSavePatient={savePatient}
               onCancel={() => setShowForm(false)}
             />
           </div>
@@ -2041,51 +2045,85 @@ function EmergencyForm({
   surgicalCases,
   defaultDate,
   onSave,
+  onSavePatient,
   onCancel,
 }: {
   patients: Patient[];
   surgicalCases: SurgicalCase[];
   defaultDate: string;
   onSave: (eb: EmergencyBooking) => Promise<void>;
+  onSavePatient: (p: Patient) => Promise<void>;
   onCancel: () => void;
 }) {
   const [urgency, setUrgency] = useState<EmergencyUrgency>("P2");
-  const [patientId, setPatientId] = useState("");
-  const [patientQuery, setPatientQuery] = useState("");
-  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
+
+  // Patient mini-form
+  const [newPatientName, setNewPatientName] = useState("");
+  const [newPatientUmr, setNewPatientUmr] = useState("");
+  const [newPatientSex, setNewPatientSex] = useState<Sex>("Unknown");
+  const [existingPatientId, setExistingPatientId] = useState<string | null>(null);
+  const [dismissedUmrMatch, setDismissedUmrMatch] = useState(false);
+
+  const normalizedUmr = newPatientUmr.trim().toUpperCase();
+  const umrMatch = !dismissedUmrMatch && !existingPatientId && normalizedUmr.length >= 3
+    ? patients.find((p) => p.hospital_number.trim().toUpperCase() === normalizedUmr) || null
+    : null;
+
+  // Procedure
   const [procedureQuery, setProcedureQuery] = useState("");
   const [linkedCaseId, setLinkedCaseId] = useState<string | null>(null);
   const [showProcedureDropdown, setShowProcedureDropdown] = useState(false);
+
   const [surgeon, setSurgeon] = useState("");
   const [surgeryDate, setSurgeryDate] = useState(defaultDate);
   const [surgeryTime, setSurgeryTime] = useState("");
   const [indication, setIndication] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const filteredPatients = patientQuery.trim().length > 0
-    ? patients.filter((p) =>
-        p.full_name.toLowerCase().includes(patientQuery.toLowerCase()) ||
-        p.hospital_number.toLowerCase().includes(patientQuery.toLowerCase())
-      ).slice(0, 6)
-    : [];
-
-  const patientCases = patientId
-    ? surgicalCases.filter((c) => c.patient_id === patientId)
+  const patientCases = existingPatientId
+    ? surgicalCases.filter((c) => c.patient_id === existingPatientId)
     : surgicalCases;
-
   const filteredCases = procedureQuery.trim().length > 1
     ? patientCases.filter((c) => c.procedure_name.toLowerCase().includes(procedureQuery.toLowerCase())).slice(0, 5)
     : [];
 
-  const canSave = patientId && procedureQuery.trim() && surgeon.trim() && surgeryDate;
+  const patientReady = (newPatientName.trim() && newPatientUmr.trim()) || existingPatientId;
+  const canSave = patientReady && procedureQuery.trim() && surgeon.trim() && surgeryDate;
+
+  function acceptUmrMatch(match: Patient) {
+    setExistingPatientId(match.id);
+    setNewPatientName(match.full_name);
+    setNewPatientUmr(match.hospital_number);
+  }
 
   async function handleSave() {
     if (!canSave) return;
     setSaving(true);
     try {
+      let pid = existingPatientId;
+      if (!pid) {
+        const newPatient: Patient = {
+          id: createId("pat"),
+          hospital_number: normalizedUmr,
+          full_name: newPatientName.trim(),
+          sex: newPatientSex,
+          date_of_birth: null,
+          age_text: null,
+          residence: null,
+          caregiver_name: null,
+          phone_primary: null,
+          phone_secondary: null,
+          sha_status: "Unknown",
+          notes: null,
+          created_at: todayIso(),
+          updated_at: todayIso(),
+        };
+        await onSavePatient(newPatient);
+        pid = newPatient.id;
+      }
       await onSave({
         id: createId("emg"),
-        patient_id: patientId,
+        patient_id: pid,
         surgical_case_id: linkedCaseId,
         procedure_notes: procedureQuery.trim(),
         surgeon: surgeon.trim(),
@@ -2103,9 +2141,14 @@ function EmergencyForm({
     }
   }
 
+  const inputCls = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]";
+
   return (
-    <div className="border-b border-[var(--border)] bg-gray-50/60 px-6 py-5">
-      <p className="mb-4 text-sm font-semibold text-gray-800">Log Emergency Case</p>
+    <div className="px-6 py-5">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-sm font-semibold text-gray-800">Log Emergency Case</p>
+        <button onClick={onCancel} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+      </div>
 
       {/* Urgency */}
       <div className="mb-4">
@@ -2127,53 +2170,103 @@ function EmergencyForm({
         </div>
       </div>
 
-      {/* Patient */}
-      <div className="mb-3 relative">
-        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Patient</label>
-        {patientId ? (
-          <div className="flex items-center justify-between rounded-lg border border-[var(--green-deep)] bg-green-50 px-3 py-2">
-            <span className="text-sm font-medium text-gray-800">{patients.find((p) => p.id === patientId)?.full_name}</span>
-            <button onClick={() => { setPatientId(""); setPatientQuery(""); }} className="text-xs text-gray-400 hover:text-gray-600"><X size={13} /></button>
-          </div>
-        ) : (
-          <>
+      {/* Patient mini-form */}
+      <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 p-3">
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          Patient
+          {existingPatientId && <span className="ml-2 rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">existing record</span>}
+        </p>
+
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          <div>
+            <label className="mb-1 block text-[10px] text-gray-400">Full name *</label>
             <input
-              value={patientQuery}
-              onChange={(e) => { setPatientQuery(e.target.value); setShowPatientDropdown(true); }}
-              onFocus={() => setShowPatientDropdown(true)}
-              placeholder="Search by name or UMR..."
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]"
+              value={newPatientName}
+              onChange={(e) => setNewPatientName(e.target.value)}
+              disabled={!!existingPatientId}
+              placeholder="e.g. Grace Owino"
+              className={clsx(inputCls, existingPatientId && "bg-gray-100 text-gray-500")}
             />
-            {showPatientDropdown && filteredPatients.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg">
-                {filteredPatients.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => { setPatientId(p.id); setPatientQuery(p.full_name); setShowPatientDropdown(false); }}
-                    className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-gray-50"
-                  >
-                    <span className="font-medium">{p.full_name}</span>
-                    <span className="text-xs text-gray-400">{p.hospital_number}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] text-gray-400">UMR *</label>
+            <input
+              value={newPatientUmr}
+              onChange={(e) => { setNewPatientUmr(e.target.value); setDismissedUmrMatch(false); }}
+              disabled={!!existingPatientId}
+              placeholder="e.g. UMR0012345"
+              className={clsx(inputCls, existingPatientId && "bg-gray-100 text-gray-500")}
+            />
+          </div>
+        </div>
+
+        {/* UMR match banner */}
+        {umrMatch && (
+          <div className="mb-2 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <div>
+              <p className="text-xs font-semibold text-amber-800">Existing patient found</p>
+              <p className="text-xs text-amber-700">{umrMatch.full_name} · {umrMatch.hospital_number}</p>
+            </div>
+            <div className="flex gap-1.5 shrink-0 ml-2">
+              <button
+                onClick={() => acceptUmrMatch(umrMatch)}
+                className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-700"
+              >
+                Use existing
+              </button>
+              <button
+                onClick={() => setDismissedUmrMatch(true)}
+                className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50"
+              >
+                Create new
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Sex selector — only for new patients */}
+        {!existingPatientId && (
+          <div>
+            <label className="mb-1 block text-[10px] text-gray-400">Sex</label>
+            <div className="flex gap-1.5">
+              {(["Male", "Female", "Other", "Unknown"] as Sex[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setNewPatientSex(s)}
+                  className={clsx(
+                    "flex-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
+                    newPatientSex === s ? "border-[var(--green-deep)] bg-[var(--green-deep)] text-white" : "border-gray-200 bg-white text-gray-500 hover:border-gray-300",
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {existingPatientId && (
+          <button
+            onClick={() => { setExistingPatientId(null); setNewPatientName(""); setNewPatientUmr(""); setDismissedUmrMatch(false); }}
+            className="mt-1 text-[11px] text-gray-400 hover:text-gray-600 underline"
+          >
+            Clear and enter a different patient
+          </button>
         )}
       </div>
 
       {/* Procedure */}
-      <div className="mb-3 relative">
+      <div className="relative mb-3">
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-          Procedure
+          Procedure *
           {linkedCaseId && <span className="ml-2 rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">linked</span>}
         </label>
         <input
           value={procedureQuery}
           onChange={(e) => { setProcedureQuery(e.target.value); setLinkedCaseId(null); setShowProcedureDropdown(true); }}
           onFocus={() => setShowProcedureDropdown(true)}
-          placeholder="Type procedure name or search existing cases..."
-          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]"
+          placeholder="Type or search existing cases…"
+          className={inputCls}
         />
         {showProcedureDropdown && filteredCases.length > 0 && (
           <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg">
@@ -2192,25 +2285,25 @@ function EmergencyForm({
       </div>
 
       {/* Surgeon + Date + Time */}
-      <div className="mb-3 grid grid-cols-3 gap-3">
+      <div className="mb-3 grid grid-cols-3 gap-2">
         <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Surgeon</label>
-          <input value={surgeon} onChange={(e) => setSurgeon(e.target.value)} placeholder="Dr. …" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Surgeon *</label>
+          <input value={surgeon} onChange={(e) => setSurgeon(e.target.value)} placeholder="Dr. …" className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Date</label>
-          <input type="date" value={surgeryDate} onChange={(e) => setSurgeryDate(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Date *</label>
+          <input type="date" value={surgeryDate} onChange={(e) => setSurgeryDate(e.target.value)} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Time (optional)</label>
-          <input type="time" value={surgeryTime} onChange={(e) => setSurgeryTime(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Time</label>
+          <input type="time" value={surgeryTime} onChange={(e) => setSurgeryTime(e.target.value)} className={inputCls} />
         </div>
       </div>
 
       {/* Indication */}
-      <div className="mb-4">
+      <div className="mb-5">
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Indication / Notes (optional)</label>
-        <textarea value={indication} onChange={(e) => setIndication(e.target.value)} rows={2} placeholder="Brief clinical indication…" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--green-deep)]" />
+        <textarea value={indication} onChange={(e) => setIndication(e.target.value)} rows={2} placeholder="Brief clinical indication…" className={inputCls} />
       </div>
 
       <div className="flex justify-end gap-2">
