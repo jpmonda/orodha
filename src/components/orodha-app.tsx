@@ -1965,6 +1965,7 @@ function EmergencyCard({
 }) {
   const done = eb.booking_status === "Done";
   const cancelled = eb.booking_status === "Cancelled";
+  const [confirmingDone, setConfirmingDone] = useState(false);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
@@ -1996,21 +1997,48 @@ function EmergencyCard({
             {!readOnly && !done && !cancelled && (
               <div className="flex gap-1">
                 <button
-                  onClick={() => void saveEmergencyBooking({ ...eb, booking_status: "Done", updated_at: todayIso() })}
+                  onClick={() => { setConfirmingDone(true); setConfirmingCancel(false); }}
                   className="rounded px-2 py-1 text-xs font-semibold text-green-700 hover:bg-green-50"
                 >
                   Mark Done
                 </button>
                 <button
-                  onClick={() => setConfirmingCancel(true)}
+                  onClick={() => { setConfirmingCancel(true); setConfirmingDone(false); }}
                   className="rounded px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
                 >
                   Cancel
                 </button>
               </div>
             )}
+            {!readOnly && done && (
+              <button
+                onClick={() => void saveEmergencyBooking({ ...eb, booking_status: "Booked", updated_at: todayIso() })}
+                className="rounded px-2 py-1 text-xs font-medium text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                Revert to Booked
+              </button>
+            )}
           </div>
         </div>
+        {confirmingDone && (
+          <div className="mt-2 flex items-center justify-between rounded-lg border border-green-200 bg-green-50/60 px-3 py-2">
+            <p className="text-xs font-semibold text-green-800">Confirm this case is done?</p>
+            <div className="flex gap-1.5 shrink-0 ml-3">
+              <button
+                onClick={() => setConfirmingDone(false)}
+                className="rounded bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
+              >
+                Keep
+              </button>
+              <button
+                onClick={() => { setConfirmingDone(false); void saveEmergencyBooking({ ...eb, booking_status: "Done", updated_at: todayIso() }); }}
+                className="rounded bg-green-700 px-3 py-1 text-xs font-semibold text-white hover:bg-green-800"
+              >
+                Yes, mark done
+              </button>
+            </div>
+          </div>
+        )}
         {confirmingCancel && (
           <div className="mt-2 space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5">
             <p className="text-xs font-semibold text-red-800">Reason for cancellation *</p>
