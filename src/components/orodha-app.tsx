@@ -695,9 +695,12 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
 
   return (
     <div className="flex h-dvh overflow-hidden bg-[var(--bg)] text-[var(--text)]">
-      <Sidebar activeView={activeView} setView={go} appUser={appUser} />
+      <Sidebar activeView={activeView} setView={go} appUser={appUser} signOut={onSignOut} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar appUser={appUser} signOut={onSignOut} />
+        <header className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-4 xl:hidden">
+          <BrandLockup subtitle="Theatre Management" size={28} gapClassName="gap-2" roundedClassName="rounded-[0.5rem]" titleClassName="text-[0.95rem] font-bold leading-none" subtitleClassName="mt-0.5 text-[0.65rem] font-medium leading-none text-[var(--muted)]" />
+          <button className="icon-button" aria-label="Sign out" onClick={onSignOut} title="Sign out"><LogOut size={15} /></button>
+        </header>
         <main className="min-h-0 flex-1 overflow-auto">
           {notice && <div className="mx-10 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">{notice}</div>}
           {isWorkspaceEmpty && isAdmin && (
@@ -1117,10 +1120,10 @@ function BrandLockup({
   );
 }
 
-function Sidebar({ activeView, setView, appUser }: { activeView: MainView; setView: (view: MainView) => void; appUser: AppUser }) {
+function Sidebar({ activeView, setView, appUser, signOut }: { activeView: MainView; setView: (view: MainView) => void; appUser: AppUser; signOut: () => Promise<void> }) {
   const visibleItems = appUser.role === "Admin" ? navItems : navItems.filter((item) => item.key !== "audit" && item.key !== "users");
   return (
-    <aside className="hidden w-[200px] shrink-0 bg-[var(--green-deep)] text-white xl:flex xl:flex-col">
+    <aside className="hidden w-[240px] shrink-0 bg-[var(--green-deep)] text-white xl:flex xl:flex-col">
       <div className="flex h-[90px] items-center border-b border-white/10 px-4">
         <BrandLockup
           subtitle="Theatre Management"
@@ -1139,40 +1142,22 @@ function Sidebar({ activeView, setView, appUser }: { activeView: MainView; setVi
           </button>
         ))}
       </nav>
-      <div className="flex h-[72px] items-center gap-2.5 border-t border-white/10 px-4">
-        <Avatar appUser={appUser} />
-        <div>
-          <div className="text-sm font-semibold">{appUser.name}</div>
-          <div className="text-sm text-[#9cc9aa]">{appUser.role}</div>
+      <div className="flex h-[72px] items-center justify-between border-t border-white/10 px-4">
+        <div className="flex items-center gap-2.5">
+          <Avatar appUser={appUser} />
+          <div>
+            <div className="text-sm font-semibold">{appUser.name}</div>
+            <div className="text-sm text-[#9cc9aa]">{appUser.role}</div>
+          </div>
         </div>
+        <button className="flex h-7 w-7 items-center justify-center rounded-lg text-[#9cc9aa] transition hover:bg-white/10 hover:text-white" aria-label="Sign out" onClick={signOut} title="Sign out">
+          <LogOut size={15} />
+        </button>
       </div>
     </aside>
   );
 }
 
-function TopBar({ appUser, signOut }: { appUser: AppUser; signOut: () => Promise<void> }) {
-  return (
-    <header className="flex h-[54px] shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-5 xl:px-8">
-      <div className="text-[0.88rem] font-medium text-[var(--muted)]">Sunday, 26 April 2026</div>
-      <div className="flex items-center gap-4">
-        <div className="relative hidden w-[252px] md:block">
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={16} />
-          <input className="input h-[2.1rem] text-[0.88rem] leading-none" style={{ paddingLeft: "2.2rem", paddingRight: "0.75rem" }} placeholder="Search patients, UMR..." />
-        </div>
-        <div className="flex items-center gap-2.5">
-          <Avatar appUser={appUser} />
-          <div className="hidden leading-tight sm:block">
-            <div className="text-[0.88rem] font-semibold">{appUser.name}</div>
-            <div className="text-[0.88rem] text-[var(--muted)]">{appUser.role}</div>
-          </div>
-          <button className="icon-button" aria-label="Sign out" onClick={signOut} title="Sign out">
-            <LogOut size={16} />
-          </button>
-        </div>
-      </div>
-    </header>
-  );
-}
 
 function CalendarScreen({
   data,
@@ -1218,7 +1203,7 @@ function CalendarScreen({
     }, [data.bookings, data.theatre_sessions]);
 
     return (
-      <div className="min-h-full">
+      <div>
         <div className="border-b border-[var(--border)] px-7 py-4">
           <PageHeader
             title="Theatre Calendar"
