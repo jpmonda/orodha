@@ -1146,8 +1146,8 @@ function CalendarScreen({
   readOnly: boolean;
   }) {
     const todayDate = startOfMonth(parseISO(today));
-    const [windowStart, setWindowStart] = useState(() => addMonths(todayDate, -2));
-    const months = Array.from({ length: 5 }, (_, i) => addMonths(windowStart, i));
+    const [windowStart, setWindowStart] = useState(() => addMonths(todayDate, -3));
+    const months = Array.from({ length: 6 }, (_, i) => addMonths(windowStart, i));
     const windowEnd = months[months.length - 1];
     const rangeLabel = format(windowStart, "MMM") === format(windowEnd, "MMM")
       ? format(windowStart, "MMM yyyy")
@@ -1172,7 +1172,7 @@ function CalendarScreen({
                     <ChevronLeft size={16} />
                   </button>
                   <button
-                    onClick={() => setWindowStart(addMonths(todayDate, -2))}
+                    onClick={() => setWindowStart(addMonths(todayDate, -3))}
                     className="rounded-lg border border-[var(--border)] bg-white px-2.5 py-1 text-xs font-semibold text-gray-500 hover:bg-gray-50"
                     title="Jump to today"
                   >
@@ -1213,19 +1213,23 @@ function CalendarScreen({
                     {Array.from({ length: 31 }, (_, index) => {
                       const day = index + 1;
                       if (day > days) return <div key={day} className="aspect-square w-full" />;
-                      const dateObject = new Date(2026, month.getMonth(), day);
+                      const dateObject = new Date(month.getFullYear(), month.getMonth(), day);
                       const date = format(dateObject, "yyyy-MM-dd");
                       const isWeekend = dateObject.getDay() === 0 || dateObject.getDay() === 6;
+                      const isToday = date === today;
                       const session = sessions.get(date);
                       const capacity = session ? capacityForSession(data, session) : null;
                       return (
                         <button
                           key={date}
-                          className={clsx("calendar-cell", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
+                          className={clsx("calendar-cell relative", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
                           onClick={() => setSelectedDate(date)}
-                          title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : undefined}
+                          title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : isToday ? "Today" : undefined}
                         >
                           {session?.is_blocked ? <Lock size={13} /> : capacity?.booked || day}
+                          {isToday && date !== selectedDate && (
+                            <span className="absolute bottom-[3px] left-1/2 -translate-x-1/2 h-[3px] w-[3px] rounded-full bg-[var(--green-accent)]" />
+                          )}
                         </button>
                       );
                     })}
@@ -1321,9 +1325,7 @@ function DayPanel({
       </div>
       <div className="space-y-3 px-5 py-3">
         {isPast && (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
-            Only today or future dates can have new bookings. This day remains visible for theatre history.
-          </div>
+          <p className="text-[0.78rem] text-[var(--muted)]">Past date — visible for theatre history only.</p>
         )}
         <div className="grid gap-3 xl:grid-cols-3">
           {bookings.map((booking) => (
