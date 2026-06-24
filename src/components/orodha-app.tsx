@@ -399,6 +399,54 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
     await upsertCollection("emergency_bookings", "emergency_bookings", eb);
   }
 
+  async function removeBookingFromList(bookingId: string, caseId: string) {
+    const previousBookings = data.bookings;
+    const previousCases = data.surgical_cases;
+    try {
+      setData((current) => ({
+        ...current,
+        bookings: current.bookings.filter((b) => b.id !== bookingId),
+      }));
+      const surgicalCase = data.surgical_cases.find((c) => c.id === caseId);
+      if (surgicalCase) {
+        await upsertCollection("surgical_cases", "surgical_cases", {
+          ...surgicalCase,
+          status: "Awaiting booking" as const,
+          updated_at: todayIso(),
+        });
+      }
+      if (source === "supabase") {
+        await deleteRow("bookings", bookingId);
+      }
+    } catch (error) {
+      setData((current) => ({
+        ...current,
+        bookings: previousBookings,
+        surgical_cases: previousCases,
+      }));
+      throw new Error(describeSupabaseError(error));
+    }
+  }
+
+  async function deleteEmergencyCase(id: string) {
+    const previousEmergency = data.emergency_bookings;
+    try {
+      setData((current) => ({
+        ...current,
+        emergency_bookings: current.emergency_bookings.filter((eb) => eb.id !== id),
+      }));
+      if (source === "supabase") {
+        await deleteRow("emergency_bookings", id);
+      }
+    } catch (error) {
+      setData((current) => ({
+        ...current,
+        emergency_bookings: previousEmergency,
+      }));
+      throw new Error(describeSupabaseError(error));
+    }
+  }
+
   async function saveProfile(profile: Profile) {
     setProfiles((current) => replaceById(current, { ...profile, updated_at: todayIso() }));
     if (source === "supabase") await upsertRow("profiles", { ...profile, updated_at: todayIso() });
@@ -713,6 +761,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
                     startNewBooking();
                   }}
                   saveBooking={saveBooking}
+                  removeBookingFromList={removeBookingFromList}
                   readOnly={readOnly}
                 />
               )}
@@ -722,6 +771,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
                   patients={data.patients}
                   surgicalCases={data.surgical_cases}
                   saveEmergencyBooking={saveEmergencyBooking}
+                  deleteEmergencyCase={deleteEmergencyCase}
                   savePatient={async (p) => { await upsertCollection("patients", "patients", p); }}
                   readOnly={readOnly}
                 />
@@ -1133,6 +1183,7 @@ function CalendarScreen({
   openBlockDay,
   startNewBooking,
   saveBooking,
+  removeBookingFromList,
   readOnly,
 }: {
   data: OrodhaData;
@@ -1143,6 +1194,7 @@ function CalendarScreen({
   openBlockDay: (date: string, reason?: string | null) => void;
   startNewBooking: () => void;
   saveBooking: (booking: Booking) => Promise<void>;
+  removeBookingFromList: (bookingId: string, caseId: string) => Promise<void>;
   readOnly: boolean;
   }) {
     const todayDate = startOfMonth(parseISO(today));
@@ -1153,6 +1205,17 @@ function CalendarScreen({
       ? format(windowStart, "MMM yyyy")
       : format(windowStart, "MMM") + " – " + format(windowEnd, "MMM yyyy");
     const sessions = new Map(data.theatre_sessions.map((session) => [session.session_date, session]));
+
+    const ghostCountByDate = useMemo(() => {
+      const sessionIdToDate = new Map(data.theatre_sessions.map((s) => [s.id, s.session_date]));
+      const counts = new Map<string, number>();
+      for (const b of data.bookings) {
+        if (b.booking_status !== "Booked") continue;
+        const d = sessionIdToDate.get(b.session_id);
+        if (d && d < today) counts.set(d, (counts.get(d) || 0) + 1);
+      }
+      return counts;
+    }, [data.bookings, data.theatre_sessions]);
 
     return (
       <div className="min-h-full">
@@ -1224,11 +1287,19 @@ function CalendarScreen({
                           key={date}
                           className={clsx("calendar-cell relative", calendarCellTone(session, capacity, isWeekend), date === selectedDate && "ring-[3px] ring-[var(--green-accent)] ring-offset-1")}
                           onClick={() => setSelectedDate(date)}
-                          title={capacity?.isFull ? "Day fully booked" : session?.is_blocked ? session.block_reason || "Theatre day blocked" : isToday ? "Today" : undefined}
+                          title={
+                            ghostCountByDate.has(date) ? `${ghostCountByDate.get(date)} case(s) with no outcome recorded` :
+                            capacity?.isFull ? "Day fully booked" :
+                            session?.is_blocked ? session.block_reason || "Theatre day blocked" :
+                            isToday ? "Today" : undefined
+                          }
                         >
                           {session?.is_blocked ? <Lock size={13} /> : capacity?.booked || day}
-                          {isToday && date !== selectedDate && (
-                            <span className="absolute bottom-[3px] left-1/2 -translate-x-1/2 h-[3px] w-[3px] rounded-full bg-[var(--green-accent)]" />
+                          {isToday && (
+                            <span className="pointer-events-none absolute inset-0 rounded-[0.42rem] ring-[2.5px] ring-inset ring-orange-400" />
+                          )}
+                          {ghostCountByDate.has(date) && !session?.is_blocked && (
+                            <span className="absolute top-[3px] right-[3px] h-[4px] w-[4px] rounded-full bg-amber-500" />
                           )}
                         </button>
                       );
@@ -1239,7 +1310,7 @@ function CalendarScreen({
             </div>
           </div>
           {selectedSession && (
-            <div className="px-7 pb-4">
+            <div className="px-7 pt-3 pb-4">
               <DayPanel
                 data={data}
                 selectedDate={selectedDate}
@@ -1248,6 +1319,7 @@ function CalendarScreen({
                 openBlockDay={openBlockDay}
                 startNewBooking={startNewBooking}
                 saveBooking={saveBooking}
+                removeBookingFromList={removeBookingFromList}
                 readOnly={readOnly}
               />
             </div>
@@ -1265,6 +1337,7 @@ function DayPanel({
   openBlockDay,
   startNewBooking,
   saveBooking,
+  removeBookingFromList,
   readOnly,
 }: {
   data: OrodhaData;
@@ -1274,6 +1347,7 @@ function DayPanel({
   openBlockDay: (date: string, reason?: string | null) => void;
   startNewBooking: () => void;
   saveBooking: (booking: Booking) => Promise<void>;
+  removeBookingFromList: (bookingId: string, caseId: string) => Promise<void>;
   readOnly: boolean;
 }) {
   const sessionCapacity = capacityForSession(data, session);
@@ -1324,12 +1398,24 @@ function DayPanel({
         </div>
       </div>
       <div className="space-y-3 px-5 py-3">
-        {isPast && (
-          <p className="text-[0.78rem] text-[var(--muted)]">Past date — visible for theatre history only.</p>
-        )}
+        {isPast && (() => {
+          const ghosts = bookings.filter((b) => b.booking_status === "Booked");
+          return ghosts.length > 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+              <p className="text-[0.8rem] font-semibold text-amber-800">
+                {ghosts.length} case{ghosts.length !== 1 ? "s" : ""} with no outcome recorded
+              </p>
+              <p className="mt-0.5 text-[0.72rem] text-amber-700">
+                Use the Mark Done, Postpone, or Cancel buttons on each card below to complete this day's record.
+              </p>
+            </div>
+          ) : (
+            <p className="text-[0.78rem] text-[var(--muted)]">Past date — visible for theatre history only.</p>
+          );
+        })()}
         <div className="grid gap-3 xl:grid-cols-3">
           {bookings.map((booking) => (
-            <TheatreSlot key={booking.id} booking={booking} saveBooking={saveBooking} readOnly={readOnly || isPast} />
+            <TheatreSlot key={booking.id} booking={booking} saveBooking={saveBooking} removeFromList={() => removeBookingFromList(booking.id, booking.case_id)} readOnly={readOnly} />
           ))}
           {!session.is_blocked &&
             Array.from({ length: session.max_cases }, (_, index) => {
@@ -1342,14 +1428,29 @@ function DayPanel({
   );
 }
 
-function TheatreSlot({ booking, saveBooking, readOnly }: { booking: EnrichedBooking; saveBooking: (booking: Booking) => Promise<void>; readOnly: boolean }) {
+function TheatreSlot({ booking, saveBooking, removeFromList, readOnly }: { booking: EnrichedBooking; saveBooking: (booking: Booking) => Promise<void>; removeFromList: () => Promise<void>; readOnly: boolean }) {
   const done = booking.booking_status === "Done";
   const postponed = booking.booking_status === "Postponed";
   const cancelled = booking.booking_status === "Cancelled";
   const editableBookedCase = booking.booking_status === "Booked";
+  const sessionIsPast = booking.session.session_date < today;
+  const [confirmingDone, setConfirmingDone] = useState(false);
+  const [outcomeNotes, setOutcomeNotes] = useState("");
+  const [doneOnSessionDate, setDoneOnSessionDate] = useState(true);
+  const [doneDate, setDoneDate] = useState(booking.session.session_date);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+
+  function resetDoneForm() {
+    setConfirmingDone(false);
+    setOutcomeNotes("");
+    setDoneOnSessionDate(true);
+    setDoneDate(booking.session.session_date);
+  }
+
   return (
+    <>
     <article className={clsx("rounded-xl border px-2.5 pb-2.5 pt-2", done ? "border-emerald-200 bg-emerald-50" : postponed ? "border-slate-200 bg-slate-50" : cancelled ? "border-red-200 bg-red-50" : "border-amber-300 bg-amber-50")}>
       <div className="flex items-start justify-between gap-3">
         <div className="text-[0.72rem] font-bold uppercase tracking-[0.06em] text-[var(--muted)]">Slot {booking.slot}</div>
@@ -1360,71 +1461,208 @@ function TheatreSlot({ booking, saveBooking, readOnly }: { booking: EnrichedBook
       <div className="mt-1 text-[0.87rem] font-medium leading-snug">{booking.surgicalCase.procedure_name}</div>
       <div className="text-[0.8rem] leading-snug text-[var(--muted)]">{booking.specialty?.name} · <span className={booking.surgicalCase.priority === "Urgent" || booking.surgicalCase.priority === "Emergency" ? "font-semibold text-orange-700" : "font-semibold"}>{booking.surgicalCase.priority}</span></div>
       {booking.preop?.preop_notes && <div className="mt-2 rounded-md bg-black/5 px-2.5 py-1.5 text-[0.72rem] leading-snug text-[var(--muted)]">{booking.preop.preop_notes}</div>}
+      {done && booking.outcome_notes && (
+        <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-100/60 px-2.5 py-1.5 text-[0.72rem] leading-snug text-emerald-800">
+          {booking.outcome_notes}
+        </div>
+      )}
       {cancelled && booking.cancellation_reason && (
         <div className="mt-2 rounded-md border border-red-200 bg-red-100/60 px-2.5 py-1.5 text-[0.72rem] leading-snug text-red-800">
           <span className="font-semibold">Reason:</span> {booking.cancellation_reason}
         </div>
       )}
-      {!readOnly && editableBookedCase && !confirmingCancel && (
+      {postponed && booking.postponement_reason && (
+        <div className="mt-2 rounded-md border border-slate-200 bg-slate-100/60 px-2.5 py-1.5 text-[0.72rem] leading-snug text-slate-700">
+          <span className="font-semibold">Postponed:</span> {booking.postponement_reason}
+        </div>
+      )}
+      {!readOnly && editableBookedCase && (
         <div className="mt-2.5 grid grid-cols-2 gap-2">
           <button
-            className="rounded-lg border border-emerald-200 bg-emerald-50 py-1.25 text-[0.8rem] font-semibold text-emerald-800"
-            onClick={() => {
-              void saveBooking({ ...booking, booking_status: "Done", updated_at: todayIso() }).catch((error) => {
-                window.alert(error instanceof Error ? error.message : "Could not mark booking done.");
-              });
-            }}
+            className="rounded-lg border border-emerald-200 bg-emerald-50 py-1.25 text-[0.8rem] font-semibold text-emerald-800 hover:bg-emerald-100"
+            onClick={() => setConfirmingDone(true)}
           >
             ✓ Mark Done
           </button>
           <button
-            className="rounded-lg border border-red-200 bg-red-50 py-1.25 text-[0.8rem] font-semibold text-red-800"
+            className="rounded-lg border border-red-200 bg-red-50 py-1.25 text-[0.8rem] font-semibold text-red-800 hover:bg-red-100"
             onClick={() => setConfirmingCancel(true)}
           >
             × Cancel
           </button>
         </div>
       )}
-      {!readOnly && editableBookedCase && confirmingCancel && (
-        <div className="mt-2.5 space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5">
-          <label className="block text-[0.72rem] font-semibold text-red-800">Reason for cancellation *</label>
-          <textarea
-            className="input min-h-[3rem] w-full text-[0.8rem]"
-            value={cancelReason}
-            onChange={(event) => setCancelReason(event.target.value)}
-            placeholder="e.g. Patient unwell, list overran, consent withdrawn"
-            autoFocus
-          />
+      {!readOnly && cancelled && !sessionIsPast && (
+        <button
+          className="mt-2 w-full rounded-lg border border-slate-200 bg-white py-1.25 text-[0.78rem] font-medium text-slate-600 hover:bg-slate-50"
+          onClick={() => void saveBooking({ ...booking, booking_status: "Booked", cancellation_reason: null, updated_at: todayIso() }).catch((e) => window.alert(e instanceof Error ? e.message : "Could not revert booking."))}
+        >
+          ↩ Revert to Booked
+        </button>
+      )}
+      {!readOnly && !confirmingCancel && !confirmingRemove && (
+        <button
+          className="mt-2 w-full text-[0.72rem] text-[var(--muted)] hover:text-red-600"
+          onClick={() => setConfirmingRemove(true)}
+        >
+          Remove from list
+        </button>
+      )}
+      {confirmingRemove && (
+        <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5 text-[0.72rem]">
+          <p className="mb-2 font-semibold text-red-800">Remove this booking permanently?</p>
+          <p className="mb-2.5 text-red-700">The booking record will be deleted. The case returns to the queue as "Awaiting booking". This cannot be undone.</p>
           <div className="grid grid-cols-2 gap-2">
             <button
-              className="rounded-lg border border-slate-200 bg-white py-1.25 text-[0.8rem] font-semibold text-slate-700"
-              onClick={() => {
-                setConfirmingCancel(false);
-                setCancelReason("");
-              }}
+              className="rounded-lg border border-slate-200 bg-white py-1 text-[0.78rem] font-semibold text-slate-700"
+              onClick={() => setConfirmingRemove(false)}
             >
-              Keep booking
+              Keep
             </button>
             <button
-              className="rounded-lg border border-red-300 bg-red-100 py-1.25 text-[0.8rem] font-semibold text-red-800 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!cancelReason.trim()}
+              className="rounded-lg border border-red-300 bg-red-100 py-1 text-[0.78rem] font-semibold text-red-800"
               onClick={() => {
-                void saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: cancelReason.trim(), updated_at: todayIso() })
-                  .then(() => {
-                    setConfirmingCancel(false);
-                    setCancelReason("");
-                  })
-                  .catch((error) => {
-                    window.alert(error instanceof Error ? error.message : "Could not cancel booking.");
-                  });
+                setConfirmingRemove(false);
+                void removeFromList().catch((e) => window.alert(e instanceof Error ? e.message : "Could not remove booking."));
               }}
             >
-              Confirm cancellation
+              Remove
             </button>
           </div>
         </div>
       )}
     </article>
+
+    {/* Mark Done modal */}
+    {confirmingDone && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        onClick={(e) => { if (e.target === e.currentTarget) resetDoneForm(); }}
+      >
+        <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-xl">
+          <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
+            <div>
+              <p className="text-sm font-bold text-gray-900">{booking.patient.full_name}</p>
+              <p className="mt-0.5 text-xs text-gray-500">{booking.surgicalCase.procedure_name} · Slot {booking.slot} · {format(parseISO(booking.session.session_date), "d MMM yyyy")}</p>
+            </div>
+            <button onClick={resetDoneForm} className="ml-4 shrink-0 text-gray-400 hover:text-gray-600"><X size={16} /></button>
+          </div>
+          <div className="space-y-3 px-6 py-5">
+            <p className="text-sm font-semibold text-gray-800">Mark case as completed</p>
+            <div className="flex gap-4 text-sm">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" checked={doneOnSessionDate} onChange={() => setDoneOnSessionDate(true)} className="accent-emerald-700" />
+                <span>Done on {format(parseISO(booking.session.session_date), "d MMM")}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" checked={!doneOnSessionDate} onChange={() => setDoneOnSessionDate(false)} className="accent-emerald-700" />
+                <span>Different date</span>
+              </label>
+            </div>
+            {!doneOnSessionDate && (
+              <input
+                type="date"
+                value={doneDate}
+                onChange={(e) => setDoneDate(e.target.value)}
+                className="input text-sm"
+              />
+            )}
+            <textarea
+              className="input min-h-[4rem] w-full text-sm"
+              value={outcomeNotes}
+              onChange={(e) => setOutcomeNotes(e.target.value)}
+              placeholder="Outcome notes, any complications… (optional)"
+              autoFocus
+            />
+          </div>
+          <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+            <button
+              className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              onClick={resetDoneForm}
+            >
+              Keep booking
+            </button>
+            <button
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
+              onClick={() => {
+                const notesWithDate = !doneOnSessionDate && doneDate && doneDate !== booking.session.session_date
+                  ? [`Done on ${format(parseISO(doneDate), "d MMM yyyy")}.`, outcomeNotes.trim()].filter(Boolean).join(" ")
+                  : outcomeNotes.trim();
+                resetDoneForm();
+                void saveBooking({ ...booking, booking_status: "Done", outcome_notes: notesWithDate || null, updated_at: todayIso() })
+                  .catch((e) => window.alert(e instanceof Error ? e.message : "Could not mark booking done."));
+              }}
+            >
+              ✓ Confirm Done
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Cancel / Postpone modal */}
+    {confirmingCancel && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        onClick={(e) => { if (e.target === e.currentTarget) { setConfirmingCancel(false); setCancelReason(""); } }}
+      >
+        <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-xl">
+          <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
+            <div>
+              <p className="text-sm font-bold text-gray-900">{booking.patient.full_name}</p>
+              <p className="mt-0.5 text-xs text-gray-500">{booking.surgicalCase.procedure_name} · Slot {booking.slot} · {format(parseISO(booking.session.session_date), "d MMM yyyy")}</p>
+            </div>
+            <button onClick={() => { setConfirmingCancel(false); setCancelReason(""); }} className="ml-4 shrink-0 text-gray-400 hover:text-gray-600"><X size={16} /></button>
+          </div>
+          <div className="space-y-3 px-6 py-5">
+            <label className="block text-sm font-semibold text-gray-800">Reason *</label>
+            <textarea
+              className="input min-h-[4rem] w-full text-sm"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Patient unwell, list overran, consent withdrawn"
+              autoFocus
+            />
+            <p className="text-xs text-[var(--muted)]">Postpone returns the case to the queue for rebooking. Cancel marks it as permanently cancelled.</p>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+            <button
+              className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              onClick={() => { setConfirmingCancel(false); setCancelReason(""); }}
+            >
+              Keep
+            </button>
+            <button
+              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-200"
+              disabled={!cancelReason.trim()}
+              onClick={() => {
+                const reason = cancelReason.trim();
+                setConfirmingCancel(false);
+                setCancelReason("");
+                void saveBooking({ ...booking, booking_status: "Postponed", postponement_reason: reason, updated_at: todayIso() })
+                  .catch((e) => window.alert(e instanceof Error ? e.message : "Could not postpone booking."));
+              }}
+            >
+              ↩ Postpone
+            </button>
+            <button
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 hover:bg-red-700"
+              disabled={!cancelReason.trim()}
+              onClick={() => {
+                const reason = cancelReason.trim();
+                setConfirmingCancel(false);
+                setCancelReason("");
+                void saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: reason, updated_at: todayIso() })
+                  .catch((e) => window.alert(e instanceof Error ? e.message : "Could not cancel booking."));
+              }}
+            >
+              × Cancel case
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -1911,6 +2149,7 @@ function EmergencyScreen({
   patients,
   surgicalCases,
   saveEmergencyBooking,
+  deleteEmergencyCase,
   savePatient,
   readOnly,
 }: {
@@ -1918,6 +2157,7 @@ function EmergencyScreen({
   patients: Patient[];
   surgicalCases: SurgicalCase[];
   saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  deleteEmergencyCase: (id: string) => Promise<void>;
   savePatient: (p: Patient) => Promise<void>;
   readOnly: boolean;
 }) {
@@ -2016,7 +2256,7 @@ function EmergencyScreen({
         <div className="divide-y divide-gray-100">
           {filtered.map((eb) => (
             <div key={eb.id} className="print-row">
-              <EmergencyCard eb={eb} saveEmergencyBooking={saveEmergencyBooking} readOnly={readOnly} />
+              <EmergencyCard eb={eb} saveEmergencyBooking={saveEmergencyBooking} onDelete={() => deleteEmergencyCase(eb.id)} readOnly={readOnly} />
             </div>
           ))}
         </div>
@@ -2028,10 +2268,12 @@ function EmergencyScreen({
 function EmergencyCard({
   eb,
   saveEmergencyBooking,
+  onDelete,
   readOnly,
 }: {
   eb: EnrichedEmergencyBooking;
   saveEmergencyBooking: (eb: EmergencyBooking) => Promise<void>;
+  onDelete: () => Promise<void>;
   readOnly: boolean;
 }) {
   const done = eb.booking_status === "Done";
@@ -2039,6 +2281,7 @@ function EmergencyCard({
   const [confirmingDone, setConfirmingDone] = useState(false);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   return (
     <div className={clsx("flex gap-3 px-6 py-4", (done || cancelled) && "opacity-70")}>
@@ -2134,6 +2377,39 @@ function EmergencyCard({
             </div>
           </div>
         )}
+        {!readOnly && !confirmingDone && !confirmingCancel && (
+          <div className="mt-2 flex justify-end">
+            <button
+              className="text-[0.7rem] text-gray-300 hover:text-red-500"
+              onClick={() => setConfirmingDelete(true)}
+            >
+              Delete
+            </button>
+          </div>
+        )}
+        {confirmingDelete && (
+          <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 p-2.5 text-[0.72rem]">
+            <p className="mb-2 font-semibold text-red-800">Delete this emergency case permanently?</p>
+            <p className="mb-2.5 text-red-700">This record will be removed from the database. This cannot be undone.</p>
+            <div className="flex gap-2">
+              <button
+                className="rounded bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 border border-gray-200"
+                onClick={() => setConfirmingDelete(false)}
+              >
+                Keep
+              </button>
+              <button
+                className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  void onDelete().catch((e) => window.alert(e instanceof Error ? e.message : "Could not delete case."));
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2178,6 +2454,7 @@ function EmergencyForm({
   const [surgeryTime, setSurgeryTime] = useState("");
   const [indication, setIndication] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const patientCases = existingPatientId
     ? surgicalCases.filter((c) => c.patient_id === existingPatientId)
@@ -2198,6 +2475,7 @@ function EmergencyForm({
   async function handleSave() {
     if (!canSave) return;
     setSaving(true);
+    setSaveError(null);
     try {
       let pid = existingPatientId;
       if (!pid) {
@@ -2235,6 +2513,8 @@ function EmergencyForm({
         created_at: todayIso(),
         updated_at: todayIso(),
       });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not save — please try again.");
     } finally {
       setSaving(false);
     }
@@ -2404,6 +2684,12 @@ function EmergencyForm({
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">Indication / Notes (optional)</label>
         <textarea value={indication} onChange={(e) => setIndication(e.target.value)} rows={2} placeholder="Brief clinical indication…" className={inputCls} />
       </div>
+
+      {saveError && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[0.78rem] text-red-800">
+          {saveError}
+        </div>
+      )}
 
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
