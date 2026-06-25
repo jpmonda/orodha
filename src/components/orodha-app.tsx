@@ -2878,7 +2878,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
   const chartH = 160;
   const monthW = 62;
   const barW = 12;
-  const barGap = 3;
+  const barGap = 0;
   const padL = 32; const padR = 16; const padT = 12; const padB = 28;
   const svgW = 12 * monthW + padL + padR;
   const svgH = chartH + padT + padB;
@@ -2960,7 +2960,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
               return (
                 <g key={row.label}>
                   {done > 0 && <rect x={x0} y={base - doneH} width={barW} height={doneH} fill="#10b981" rx={2} />}
-                  {booked > 0 && <rect x={x1} y={base - bookedH} width={barW} height={bookedH} fill="#14b8a6" rx={2} />}
+                  {booked > 0 && <rect x={x1} y={base - bookedH} width={barW} height={bookedH} fill="#3b82f6" rx={2} />}
                   {emerg > 0 && <rect x={x2} y={base - emergH} width={barW} height={emergH} fill="#f59e0b" rx={2} />}
                   <text x={gx + monthW / 2} y={base + 17} textAnchor="middle" fontSize={9} fill="#6b7280">{format(months[i], "MMM")}</text>
                 </g>
@@ -2970,7 +2970,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
         </div>
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-gray-500">
           <LegendDot color="#10b981" label="Done" />
-          <LegendDot color="#14b8a6" label="Booked (upcoming)" />
+          <LegendDot color="#3b82f6" label="Booked (upcoming)" />
           <LegendDot color="#f59e0b" label="Emergency" />
         </div>
       </div>
