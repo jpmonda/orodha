@@ -2724,10 +2724,12 @@ function EmergencyForm({
 
 function MetricCard({ label, value, sub, colorClass }: { label: string; value: string | number; sub: string; colorClass: string }) {
   return (
-    <div className={`rounded-xl border p-4 shadow-sm ${colorClass}`}>
-      <p className="text-xs font-medium opacity-70">{label}</p>
-      <p className="mt-1 text-2xl font-bold">{value}</p>
-      <p className="mt-1 text-[0.68rem] opacity-60">{sub}</p>
+    <div className={`rounded-xl border px-4 py-3 shadow-sm ${colorClass}`}>
+      <p className="text-xs font-semibold">{label}</p>
+      <div className="mt-1.5 flex items-baseline justify-between gap-2">
+        <p className="text-[0.68rem] opacity-60 leading-none">{sub}</p>
+        <p className="text-xl font-bold leading-none shrink-0">{value}</p>
+      </div>
     </div>
   );
 }
@@ -2744,6 +2746,7 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBooking[]; emergencyBookings: EnrichedEmergencyBooking[] }) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
+  const [tooltip, setTooltip] = useState<{ i: number; month: string; done: number; booked: number; emerg: number } | null>(null);
 
   const months = eachMonthOfInterval({
     start: startOfYear(new Date(year, 0, 1)),
@@ -2926,14 +2929,40 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <MetricCard label="Theatre Utilisation" value={`${utilisationPct}%`} sub="of resolved slots completed" colorClass="bg-emerald-50 border-emerald-100 text-emerald-700" />
         <MetricCard label="Cases Completed" value={totals["Done"]} sub={`of ${grandTotal + totalEmergency} total procedures`} colorClass="bg-blue-50 border-blue-100 text-blue-700" />
-        <MetricCard label="Cancellation Rate" value={`${cancellationPct}%`} sub={`${totals["Cancelled"] + totals["No-show"]} cancelled or no-show`} colorClass="bg-red-50 border-red-100 text-red-700" />
+        <MetricCard label="Cancellation Rate" value={`${cancellationPct}%`} sub="cancelled / no-show" colorClass="bg-red-50 border-red-100 text-red-700" />
         <MetricCard label="Emergency Cases" value={totalEmergency} sub="unplanned urgent procedures" colorClass="bg-orange-50 border-orange-100 text-orange-700" />
       </div>
 
       {/* Monthly bar chart */}
       <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h3 className="mb-4 text-sm font-semibold text-gray-700">Monthly Case Volume — {year}</h3>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" style={{ position: "relative" }}>
+          {tooltip && (
+            <div
+              className="pointer-events-none"
+              style={{
+                position: "absolute", top: 4, zIndex: 10, whiteSpace: "nowrap",
+                left: `${((padL + tooltip.i * monthW + monthW / 2) / svgW) * 100}%`,
+                transform: "translateX(-50%)",
+                background: "white", border: "0.5px solid #e5e7eb", borderRadius: 6,
+                padding: "7px 11px", fontSize: 11, boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 5, color: "#111827", fontSize: 12 }}>{tooltip.month} {year}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 20, marginBottom: 2, color: "#059669" }}>
+                <span>Done</span><span style={{ fontWeight: 600 }}>{tooltip.done}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 20, marginBottom: 2, color: "#2563eb" }}>
+                <span>Booked</span><span style={{ fontWeight: 600 }}>{tooltip.booked}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 20, marginBottom: 4, color: "#d97706" }}>
+                <span>Emergency</span><span style={{ fontWeight: 600 }}>{tooltip.emerg}</span>
+              </div>
+              <div style={{ borderTop: "0.5px solid #e5e7eb", paddingTop: 4, display: "flex", justifyContent: "space-between", gap: 20, color: "#374151", fontWeight: 600 }}>
+                <span>Total</span><span>{tooltip.done + tooltip.booked + tooltip.emerg}</span>
+              </div>
+            </div>
+          )}
           <svg viewBox={`0 0 ${svgW} ${svgH}`} width="100%" style={{ minWidth: 520, display: "block" }}>
             {/* Gridlines + Y labels */}
             {yTicks.map((pct) => {
@@ -2967,6 +2996,13 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
                   {booked > 0 && <rect x={x1} y={base - bookedH} width={barW} height={bookedH} fill="#3b82f6" rx={2} />}
                   {emerg > 0 && <rect x={x2} y={base - emergH} width={barW} height={emergH} fill="#f59e0b" rx={2} />}
                   <text x={gx + monthW / 2} y={base + 17} textAnchor="middle" fontSize={9} fill="#6b7280">{format(months[i], "MMM")}</text>
+                  <rect
+                    x={gx} y={padT} width={monthW} height={chartH}
+                    fill="transparent"
+                    style={{ cursor: "default" }}
+                    onMouseEnter={() => setTooltip({ i, month: row.label, done, booked, emerg })}
+                    onMouseLeave={() => setTooltip(null)}
+                  />
                 </g>
               );
             })}
