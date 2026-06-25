@@ -301,7 +301,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             return;
           }
         } catch (error) {
-          setNotice(`Using demo data until sign-in: ${error instanceof Error ? error.message : "Supabase read failed"}`);
+          setNotice("Sign in to load your workspace — showing demo data for now.");
         }
       }
       const saved = window.localStorage.getItem(storageKey);
