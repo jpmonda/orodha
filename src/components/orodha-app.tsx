@@ -2766,8 +2766,88 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
     const emergency = monthEmergency.length;
     const resolved = counts["Done"] + counts["Cancelled"] + counts["Postponed"] + counts["No-show"];
     const utilisation = resolved > 0 ? Math.round((counts["Done"] / resolved) * 100) : null;
-    return { label, counts, total, emergency, utilisation };
+    return { label, counts, total, emergency, utilisation, monthBookings, monthEmergency };
   });
+
+  function ageStr(dob: string | null | undefined): string {
+    if (!dob) return "—";
+    const months = Math.floor((Date.now() - new Date(dob).getTime()) / (1000 * 60 * 60 * 24 * 30.44));
+    return months < 24 ? `${months}m` : `${Math.floor(months / 12)}y`;
+  }
+
+  function printMonthReport(label: string, mb: EnrichedBooking[], me: EnrichedEmergencyBooking[]) {
+    const win = window.open("", "_blank");
+    if (!win) return;
+    const now = format(new Date(), "d MMMM yyyy, HH:mm");
+    const sorted = [...mb].sort((a, b) => a.session.session_date.localeCompare(b.session.session_date) || a.slot - b.slot);
+    const done = mb.filter((b) => b.booking_status === "Done").length;
+    const upcoming = mb.filter((b) => b.booking_status === "Booked").length;
+    const cancelled = mb.filter((b) => b.booking_status === "Cancelled" || b.booking_status === "No-show").length;
+    const resolved = mb.filter((b) => b.booking_status !== "Booked").length;
+    const utilPct = resolved > 0 ? Math.round((done / resolved) * 100) : 0;
+
+    const badge = (text: string, bg: string, fg: string) =>
+      `<span style="background:${bg};color:${fg};padding:2px 9px;border-radius:9999px;font-size:11px;font-weight:600">${text}</span>`;
+    const statusBadge = (s: string) => {
+      const m: Record<string, [string, string]> = {
+        Done: ["#dcfce7", "#166534"], Booked: ["#dbeafe", "#1e40af"],
+        Cancelled: ["#fee2e2", "#991b1b"], Postponed: ["#fef3c7", "#92400e"], "No-show": ["#f3f4f6", "#374151"],
+      };
+      const [bg, fg] = m[s] || ["#f3f4f6", "#374151"];
+      return badge(s, bg, fg);
+    };
+
+    const caseRows = sorted.map((b, i) => `
+      <tr>
+        <td style="text-align:center;color:#9ca3af">${i + 1}</td>
+        <td><strong>${b.patient.full_name}</strong></td>
+        <td style="text-align:center;color:#6b7280">${ageStr(b.patient.date_of_birth)}</td>
+        <td>${b.surgicalCase.procedure_name}</td>
+        <td style="color:#6b7280">${format(parseISO(b.session.session_date), "d MMM yyyy")}</td>
+        <td style="color:#6b7280">${b.surgicalCase.primary_surgeon || "—"}</td>
+        <td style="text-align:center">${statusBadge(b.booking_status)}</td>
+      </tr>`).join("");
+
+    const emergRows = me.map((e, i) => `
+      <tr>
+        <td style="text-align:center;color:#9ca3af">${i + 1}</td>
+        <td><strong>${e.patient?.full_name || "—"}</strong></td>
+        <td style="text-align:center;color:#6b7280">${ageStr(e.patient?.date_of_birth)}</td>
+        <td>${e.procedure_notes}</td>
+        <td style="color:#6b7280">${format(parseISO(e.surgery_date), "d MMM yyyy")}</td>
+        <td style="color:#6b7280">${e.surgeon}</td>
+        <td style="text-align:center">${badge(e.urgency, "#ffedd5", "#c2410c")}</td>
+      </tr>`).join("");
+
+    const tStyle = `width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px`;
+    const thStyle = `background:#f9fafb;padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;border-bottom:2px solid #e5e7eb`;
+    const tdStyle = `padding:8px 12px;border-bottom:1px solid #f3f4f6`;
+    const thead = (cols: string[]) => `<thead><tr>${cols.map((c) => `<th style="${thStyle}">${c}</th>`).join("")}</tr></thead>`;
+
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Monthly Report — ${label} ${year}</title>
+      <style>
+        body{font-family:Arial,sans-serif;margin:0;padding:32px;color:#111827;font-size:13px}
+        td{${tdStyle}} @media print{button{display:none!important}}
+      </style></head><body>
+      <div style="border-bottom:2px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#9ca3af;font-weight:600;margin-bottom:4px">Paediatric Surgery Unit</div>
+        <h1 style="margin:0;font-size:22px">Monthly Theatre Report — ${label} ${year}</h1>
+        <div style="font-size:11px;color:#9ca3af;margin-top:4px">Generated ${now}</div>
+      </div>
+      <div style="display:flex;gap:28px;padding:14px 20px;background:#f9fafb;border-radius:8px;margin-bottom:24px">
+        ${[["Cases Done", done, "#166534"], ["Upcoming", upcoming, "#1e40af"], ["Cancelled / No-show", cancelled, "#991b1b"], ["Emergency", me.length, "#c2410c"], ["Utilisation", `${utilPct}%`, "#065f46"]].map(([l, v, c]) => `<div><div style="font-size:22px;font-weight:700;color:${c}">${v}</div><div style="font-size:11px;color:#6b7280">${l}</div></div>`).join("")}
+      </div>
+      ${sorted.length > 0 ? `<h2 style="font-size:14px;margin:0 0 8px;color:#374151">Scheduled Cases (${sorted.length})</h2>
+        <table style="${tStyle}">${thead(["#", "Patient", "Age", "Procedure", "Session Date", "Surgeon", "Status"])}<tbody>${caseRows}</tbody></table>` : ""}
+      ${me.length > 0 ? `<h2 style="font-size:14px;margin:0 0 8px;color:#374151">Emergency Cases (${me.length})</h2>
+        <table style="${tStyle}">${thead(["#", "Patient", "Age", "Procedure", "Date", "Surgeon", "Urgency"])}<tbody>${emergRows}</tbody></table>` : ""}
+      <button onclick="window.print()" style="background:#15803d;color:#fff;border:none;padding:10px 28px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600">
+        Print / Save as PDF
+      </button>
+    </body></html>`);
+    win.document.close();
+  }
 
   const totals = Object.fromEntries(statuses.map((s) => [s, rows.reduce((sum, r) => sum + r.counts[s], 0)])) as Record<BookingStatus, number>;
   const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
@@ -2907,10 +2987,11 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
               <th className="px-4 py-3 text-center text-orange-500">Emergency</th>
               <th className="px-4 py-3 text-center">Total</th>
               <th className="px-4 py-3 text-center text-emerald-600">Utilisation</th>
+              <th className="px-4 py-3 no-print" />
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {rows.map(({ label, counts, total, emergency, utilisation }) => (
+            {rows.map(({ label, counts, total, emergency, utilisation, monthBookings, monthEmergency }) => (
               <tr key={label} className="print-row hover:bg-gray-50/60">
                 <td className="px-4 py-2.5 font-medium text-gray-700">{label}</td>
                 {statuses.map((s) => (
@@ -2933,6 +3014,17 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
                     ? <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${utilisation >= 80 ? "bg-emerald-100 text-emerald-700" : utilisation >= 60 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>{utilisation}%</span>
                     : <span className="text-gray-300">—</span>}
                 </td>
+                <td className="px-4 py-2.5 text-center no-print">
+                  {(total + emergency) > 0 && (
+                    <button
+                      onClick={() => printMonthReport(label, monthBookings, monthEmergency)}
+                      className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-500 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700"
+                      title={`Print ${label} report`}
+                    >
+                      <FileText size={12} /> Report
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -2943,6 +3035,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
               <td className="px-4 py-2.5 text-center text-orange-600">{totalEmergency || "—"}</td>
               <td className="px-4 py-2.5 text-center">{(grandTotal + totalEmergency) || "—"}</td>
               <td className="px-4 py-2.5 text-center text-emerald-600">{utilisationPct}%</td>
+              <td className="no-print" />
             </tr>
           </tfoot>
         </table>

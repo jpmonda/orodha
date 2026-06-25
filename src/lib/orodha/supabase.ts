@@ -89,7 +89,6 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     preopAssessments,
     bookings,
     caseNotes,
-    emergencyBookings,
   ];
   const failed = responses.find((response) => response.error);
   if (failed?.error) throw failed.error;
@@ -104,7 +103,7 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     preop_assessments: preopAssessments.data || [],
     bookings: bookings.data || [],
     case_notes: caseNotes.data || [],
-    emergency_bookings: emergencyBookings.data || [],
+    emergency_bookings: emergencyBookings.error ? [] : (emergencyBookings.data || []),
   } as OrodhaData;
 }
 
