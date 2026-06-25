@@ -2874,9 +2874,11 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
     .sort((a, b) => b.total - a.total);
 
   // Bar chart geometry
-  const maxBarValue = Math.max(...rows.map((r) => r.total + r.emergency), 1);
+  const maxBarValue = Math.max(...rows.map((r) => Math.max(r.counts["Done"], r.counts["Booked"], r.emergency)), 1);
   const chartH = 160;
   const monthW = 62;
+  const barW = 12;
+  const barGap = 3;
   const padL = 32; const padR = 16; const padT = 12; const padB = 28;
   const svgW = 12 * monthW + padL + padR;
   const svgH = chartH + padT + padB;
@@ -2944,25 +2946,22 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
             {/* Bars */}
             {rows.map((row, i) => {
               const gx = padL + i * monthW;
-              const mainX = gx + monthW * 0.1;
-              const mainW = monthW * 0.65;
-              const emergW = monthW * 0.18;
-              const emergX = gx + monthW * 0.79;
+              const groupOffset = (monthW - 3 * barW - 2 * barGap) / 2;
               const base = padT + chartH;
               const done = row.counts["Done"];
               const booked = row.counts["Booked"];
-              const failed = row.counts["Cancelled"] + row.counts["Postponed"] + row.counts["No-show"];
               const emerg = row.emergency;
               const doneH = (done / maxBarValue) * chartH;
               const bookedH = (booked / maxBarValue) * chartH;
-              const failedH = (failed / maxBarValue) * chartH;
               const emergH = (emerg / maxBarValue) * chartH;
+              const x0 = gx + groupOffset;
+              const x1 = x0 + barW + barGap;
+              const x2 = x1 + barW + barGap;
               return (
                 <g key={row.label}>
-                  {failed > 0 && <rect x={mainX} y={base - doneH - bookedH - failedH} width={mainW} height={failedH} fill="#fca5a5" rx={2} />}
-                  {booked > 0 && <rect x={mainX} y={base - doneH - bookedH} width={mainW} height={bookedH} fill="#93c5fd" rx={2} />}
-                  {done > 0 && <rect x={mainX} y={base - doneH} width={mainW} height={doneH} fill="#6ee7b7" rx={2} />}
-                  {emerg > 0 && <rect x={emergX} y={base - emergH} width={emergW} height={emergH} fill="#fb923c" rx={2} />}
+                  {done > 0 && <rect x={x0} y={base - doneH} width={barW} height={doneH} fill="#10b981" rx={2} />}
+                  {booked > 0 && <rect x={x1} y={base - bookedH} width={barW} height={bookedH} fill="#14b8a6" rx={2} />}
+                  {emerg > 0 && <rect x={x2} y={base - emergH} width={barW} height={emergH} fill="#f59e0b" rx={2} />}
                   <text x={gx + monthW / 2} y={base + 17} textAnchor="middle" fontSize={9} fill="#6b7280">{format(months[i], "MMM")}</text>
                 </g>
               );
@@ -2970,10 +2969,9 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
           </svg>
         </div>
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-gray-500">
-          <LegendDot color="#6ee7b7" label="Done" />
-          <LegendDot color="#93c5fd" label="Booked (upcoming)" />
-          <LegendDot color="#fca5a5" label="Cancelled / Postponed / No-show" />
-          <LegendDot color="#fb923c" label="Emergency" />
+          <LegendDot color="#10b981" label="Done" />
+          <LegendDot color="#14b8a6" label="Booked (upcoming)" />
+          <LegendDot color="#f59e0b" label="Emergency" />
         </div>
       </div>
 
