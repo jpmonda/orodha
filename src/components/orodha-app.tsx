@@ -629,15 +629,19 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
         bookingsBySlot.set(`${session_id}::${row.slot}`, { ...row, id: ((saved as { id?: string } | null)?.id || payload.id) as string, case_id, session_id });
       }
 
-      const afterBookings = await fetchOrodhaData();
-      const existingEmergency = afterBookings?.emergency_bookings || [];
-      const emergencyByKey = new Map(existingEmergency.map((item) => [`${item.patient_id}::${item.surgery_date}::${item.procedure_notes}`, item]));
-      for (const row of demoData.emergency_bookings) {
-        const patient_id = patientIdMap.get(row.patient_id) || row.patient_id;
-        const key = `${patient_id}::${row.surgery_date}::${row.procedure_notes}`;
-        const existing = emergencyByKey.get(key);
-        const payload = { ...row, id: existing?.id || nextSupabaseId(), patient_id };
-        await upsertRow("emergency_bookings", payload as unknown as Record<string, unknown>);
+      try {
+        const afterBookings = await fetchOrodhaData();
+        const existingEmergency = afterBookings?.emergency_bookings || [];
+        const emergencyByKey = new Map(existingEmergency.map((item) => [`${item.patient_id}::${item.surgery_date}::${item.procedure_notes}`, item]));
+        for (const row of demoData.emergency_bookings) {
+          const patient_id = patientIdMap.get(row.patient_id) || row.patient_id;
+          const key = `${patient_id}::${row.surgery_date}::${row.procedure_notes}`;
+          const existing = emergencyByKey.get(key);
+          const payload = { ...row, id: existing?.id || nextSupabaseId(), patient_id };
+          await upsertRow("emergency_bookings", payload as unknown as Record<string, unknown>);
+        }
+      } catch {
+        setNotice("Demo data loaded — emergency_bookings table missing. Run the setup SQL in Supabase to enable emergency cases.");
       }
 
       for (const row of demoData.case_notes) {
