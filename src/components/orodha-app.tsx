@@ -1413,6 +1413,23 @@ function DayPanel({
   );
 }
 
+function toBaseBooking(eb: EnrichedBooking): Booking {
+  return {
+    id: eb.id,
+    case_id: eb.case_id,
+    session_id: eb.session_id,
+    slot: eb.slot,
+    booking_status: eb.booking_status,
+    order_on_list: eb.order_on_list,
+    postop_destination: eb.postop_destination,
+    cancellation_reason: eb.cancellation_reason,
+    postponement_reason: eb.postponement_reason,
+    outcome_notes: eb.outcome_notes,
+    created_at: eb.created_at,
+    updated_at: eb.updated_at,
+  };
+}
+
 function TheatreSlot({ booking, saveBooking, removeFromList, readOnly }: { booking: EnrichedBooking; saveBooking: (booking: Booking) => Promise<void>; removeFromList: () => Promise<void>; readOnly: boolean }) {
   const done = booking.booking_status === "Done";
   const postponed = booking.booking_status === "Postponed";
@@ -1480,7 +1497,7 @@ function TheatreSlot({ booking, saveBooking, removeFromList, readOnly }: { booki
       {!readOnly && cancelled && !sessionIsPast && (
         <button
           className="mt-2 w-full rounded-lg border border-slate-200 bg-white py-1.25 text-[0.78rem] font-medium text-slate-600 hover:bg-slate-50"
-          onClick={() => void saveBooking({ ...booking, booking_status: "Booked", cancellation_reason: null, updated_at: todayIso() }).catch((e) => window.alert(e instanceof Error ? e.message : "Could not revert booking."))}
+          onClick={() => void saveBooking({ ...toBaseBooking(booking), booking_status: "Booked", cancellation_reason: null, updated_at: todayIso() }).catch((e) => window.alert(e instanceof Error ? e.message : "Could not revert booking."))}
         >
           ↩ Revert to Booked
         </button>
@@ -1574,7 +1591,7 @@ function TheatreSlot({ booking, saveBooking, removeFromList, readOnly }: { booki
                   ? [`Done on ${format(parseISO(doneDate), "d MMM yyyy")}.`, outcomeNotes.trim()].filter(Boolean).join(" ")
                   : outcomeNotes.trim();
                 resetDoneForm();
-                void saveBooking({ ...booking, booking_status: "Done", outcome_notes: notesWithDate || null, updated_at: todayIso() })
+                void saveBooking({ ...toBaseBooking(booking), booking_status: "Done", outcome_notes: notesWithDate || null, updated_at: todayIso() })
                   .catch((e) => window.alert(e instanceof Error ? e.message : "Could not mark booking done."));
               }}
             >
@@ -1624,7 +1641,7 @@ function TheatreSlot({ booking, saveBooking, removeFromList, readOnly }: { booki
                 const reason = cancelReason.trim();
                 setConfirmingCancel(false);
                 setCancelReason("");
-                void saveBooking({ ...booking, booking_status: "Postponed", postponement_reason: reason, updated_at: todayIso() })
+                void saveBooking({ ...toBaseBooking(booking), booking_status: "Postponed", postponement_reason: reason, updated_at: todayIso() })
                   .catch((e) => window.alert(e instanceof Error ? e.message : "Could not postpone booking."));
               }}
             >
@@ -1637,7 +1654,7 @@ function TheatreSlot({ booking, saveBooking, removeFromList, readOnly }: { booki
                 const reason = cancelReason.trim();
                 setConfirmingCancel(false);
                 setCancelReason("");
-                void saveBooking({ ...booking, booking_status: "Cancelled", cancellation_reason: reason, updated_at: todayIso() })
+                void saveBooking({ ...toBaseBooking(booking), booking_status: "Cancelled", cancellation_reason: reason, updated_at: todayIso() })
                   .catch((e) => window.alert(e instanceof Error ? e.message : "Could not cancel booking."));
               }}
             >
