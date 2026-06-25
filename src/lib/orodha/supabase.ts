@@ -65,6 +65,7 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     preopAssessments,
     bookings,
     caseNotes,
+    emergencyBookings,
   ] = await Promise.all([
     supabase.from("specialties").select("*").order("name"),
     supabase.from("procedures").select("*").order("name"),
@@ -75,6 +76,7 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     supabase.from("preop_assessments").select("*").order("updated_at", { ascending: false }),
     supabase.from("bookings").select("*").order("created_at", { ascending: false }),
     supabase.from("case_notes").select("*").order("created_at", { ascending: false }),
+    supabase.from("emergency_bookings").select("*").order("surgery_date", { ascending: false }),
   ]);
 
   const responses = [
@@ -87,6 +89,7 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     preopAssessments,
     bookings,
     caseNotes,
+    emergencyBookings,
   ];
   const failed = responses.find((response) => response.error);
   if (failed?.error) throw failed.error;
@@ -101,7 +104,7 @@ export async function fetchOrodhaData(): Promise<OrodhaData | null> {
     preop_assessments: preopAssessments.data || [],
     bookings: bookings.data || [],
     case_notes: caseNotes.data || [],
-    emergency_bookings: [],
+    emergency_bookings: emergencyBookings.data || [],
   } as OrodhaData;
 }
 

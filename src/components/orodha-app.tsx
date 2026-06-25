@@ -629,6 +629,17 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
         bookingsBySlot.set(`${session_id}::${row.slot}`, { ...row, id: ((saved as { id?: string } | null)?.id || payload.id) as string, case_id, session_id });
       }
 
+      const afterBookings = await fetchOrodhaData();
+      const existingEmergency = afterBookings?.emergency_bookings || [];
+      const emergencyByKey = new Map(existingEmergency.map((item) => [`${item.patient_id}::${item.surgery_date}::${item.procedure_notes}`, item]));
+      for (const row of demoData.emergency_bookings) {
+        const patient_id = patientIdMap.get(row.patient_id) || row.patient_id;
+        const key = `${patient_id}::${row.surgery_date}::${row.procedure_notes}`;
+        const existing = emergencyByKey.get(key);
+        const payload = { ...row, id: existing?.id || nextSupabaseId(), patient_id };
+        await upsertRow("emergency_bookings", payload as unknown as Record<string, unknown>);
+      }
+
       for (const row of demoData.case_notes) {
         const payload = { ...row, id: nextSupabaseId(), case_id: caseIdMap.get(row.case_id) || row.case_id };
         await upsertRow("case_notes", payload);
@@ -2707,6 +2718,25 @@ function EmergencyForm({
   );
 }
 
+function MetricCard({ label, value, sub, colorClass }: { label: string; value: string | number; sub: string; colorClass: string }) {
+  return (
+    <div className={`rounded-xl border p-4 shadow-sm ${colorClass}`}>
+      <p className="text-xs font-medium opacity-70">{label}</p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
+      <p className="mt-1 text-[0.68rem] opacity-60">{sub}</p>
+    </div>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+    </span>
+  );
+}
+
 function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBooking[]; emergencyBookings: EnrichedEmergencyBooking[] }) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
@@ -2729,25 +2759,48 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
   const rows = months.map((month) => {
     const label = format(month, "MMMM");
     const key = format(month, "yyyy-MM");
-    const monthBookings = bookings.filter(
-      (b) => format(parseISO(b.session.session_date), "yyyy-MM") === key
-    );
-    const monthEmergency = emergencyBookings.filter(
-      (e) => format(parseISO(e.surgery_date), "yyyy-MM") === key
-    );
-    const counts = Object.fromEntries(
-      statuses.map((s) => [s, monthBookings.filter((b) => b.booking_status === s).length])
-    ) as Record<BookingStatus, number>;
+    const monthBookings = bookings.filter((b) => format(parseISO(b.session.session_date), "yyyy-MM") === key);
+    const monthEmergency = emergencyBookings.filter((e) => format(parseISO(e.surgery_date), "yyyy-MM") === key);
+    const counts = Object.fromEntries(statuses.map((s) => [s, monthBookings.filter((b) => b.booking_status === s).length])) as Record<BookingStatus, number>;
     const total = monthBookings.length;
     const emergency = monthEmergency.length;
-    return { label, counts, total, emergency };
+    const resolved = counts["Done"] + counts["Cancelled"] + counts["Postponed"] + counts["No-show"];
+    const utilisation = resolved > 0 ? Math.round((counts["Done"] / resolved) * 100) : null;
+    return { label, counts, total, emergency, utilisation };
   });
 
-  const totals = Object.fromEntries(
-    statuses.map((s) => [s, rows.reduce((sum, r) => sum + r.counts[s], 0)])
-  ) as Record<BookingStatus, number>;
+  const totals = Object.fromEntries(statuses.map((s) => [s, rows.reduce((sum, r) => sum + r.counts[s], 0)])) as Record<BookingStatus, number>;
   const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
   const totalEmergency = rows.reduce((sum, r) => sum + r.emergency, 0);
+
+  const totalResolved = totals["Done"] + totals["Cancelled"] + totals["Postponed"] + totals["No-show"];
+  const utilisationPct = totalResolved > 0 ? Math.round((totals["Done"] / totalResolved) * 100) : 0;
+  const cancellationPct = totalResolved > 0 ? Math.round(((totals["Cancelled"] + totals["No-show"]) / totalResolved) * 100) : 0;
+
+  // Specialty breakdown (year-filtered)
+  const specialtyMap = new Map<string, { done: number; booked: number; cancelled: number; postponed: number }>();
+  for (const b of bookings) {
+    if (parseISO(b.session.session_date).getFullYear() !== year) continue;
+    const name = b.specialty?.name || "Unspecified";
+    const entry = specialtyMap.get(name) || { done: 0, booked: 0, cancelled: 0, postponed: 0 };
+    if (b.booking_status === "Done") entry.done++;
+    else if (b.booking_status === "Booked") entry.booked++;
+    else if (b.booking_status === "Cancelled") entry.cancelled++;
+    else if (b.booking_status === "Postponed") entry.postponed++;
+    specialtyMap.set(name, entry);
+  }
+  const specialtyRows = Array.from(specialtyMap.entries())
+    .map(([name, c]) => ({ name, ...c, total: c.done + c.booked + c.cancelled + c.postponed }))
+    .sort((a, b) => b.total - a.total);
+
+  // Bar chart geometry
+  const maxBarValue = Math.max(...rows.map((r) => r.total + r.emergency), 1);
+  const chartH = 160;
+  const monthW = 62;
+  const padL = 32; const padR = 16; const padT = 12; const padB = 28;
+  const svgW = 12 * monthW + padL + padR;
+  const svgH = chartH + padT + padB;
+  const yTicks = [0.25, 0.5, 0.75, 1];
 
   const statusColors: Record<BookingStatus, string> = {
     Booked: "bg-blue-100 text-blue-800",
@@ -2765,6 +2818,8 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
         <h1 className="mt-0.5 text-xl font-bold text-gray-900">Monthly Reports — {year}</h1>
         <p className="mt-0.5 text-xs text-gray-500">Generated {format(new Date(), "d MMMM yyyy, HH:mm")}</p>
       </div>
+
+      {/* Heading + controls */}
       <div className="flex items-center justify-between no-print">
         <PageTitle title="Monthly Reports" />
         <div className="flex items-center gap-2">
@@ -2773,9 +2828,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
             onChange={(e) => setYear(Number(e.target.value))}
             className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm focus:outline-none"
           >
-            {allYears.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
+            {allYears.map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
           <button onClick={() => window.print()} className="btn-primary flex items-center gap-1.5 px-4 py-2 text-sm">
             <Printer size={15} /> Print / PDF
@@ -2783,17 +2836,64 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-        {statuses.map((s) => (
-          <div key={s} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-            <p className="text-xs font-medium text-gray-500">{s}</p>
-            <p className="mt-1 text-2xl font-bold text-gray-900">{totals[s]}</p>
-          </div>
-        ))}
-        <div className="rounded-xl border border-red-100 bg-red-50 p-4 shadow-sm">
-          <p className="text-xs font-medium text-red-500">Emergency</p>
-          <p className="mt-1 text-2xl font-bold text-red-700">{totalEmergency}</p>
+      {/* Headline metric cards */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <MetricCard label="Theatre Utilisation" value={`${utilisationPct}%`} sub="of resolved slots completed" colorClass="bg-emerald-50 border-emerald-100 text-emerald-700" />
+        <MetricCard label="Cases Completed" value={totals["Done"]} sub={`of ${grandTotal + totalEmergency} total procedures`} colorClass="bg-blue-50 border-blue-100 text-blue-700" />
+        <MetricCard label="Cancellation Rate" value={`${cancellationPct}%`} sub={`${totals["Cancelled"] + totals["No-show"]} cancelled or no-show`} colorClass="bg-red-50 border-red-100 text-red-700" />
+        <MetricCard label="Emergency Cases" value={totalEmergency} sub="unplanned urgent procedures" colorClass="bg-orange-50 border-orange-100 text-orange-700" />
+      </div>
+
+      {/* Monthly bar chart */}
+      <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 text-sm font-semibold text-gray-700">Monthly Case Volume — {year}</h3>
+        <div className="overflow-x-auto">
+          <svg viewBox={`0 0 ${svgW} ${svgH}`} width="100%" style={{ minWidth: 520, display: "block" }}>
+            {/* Gridlines + Y labels */}
+            {yTicks.map((pct) => {
+              const y = padT + chartH - pct * chartH;
+              return (
+                <g key={pct}>
+                  <line x1={padL} x2={svgW - padR} y1={y} y2={y} stroke="#e5e7eb" strokeWidth={1} />
+                  <text x={padL - 4} y={y + 4} textAnchor="end" fontSize={9} fill="#9ca3af">{Math.round(maxBarValue * pct)}</text>
+                </g>
+              );
+            })}
+            {/* Baseline */}
+            <line x1={padL} x2={svgW - padR} y1={padT + chartH} y2={padT + chartH} stroke="#e5e7eb" strokeWidth={1} />
+            {/* Bars */}
+            {rows.map((row, i) => {
+              const gx = padL + i * monthW;
+              const mainX = gx + monthW * 0.1;
+              const mainW = monthW * 0.65;
+              const emergW = monthW * 0.18;
+              const emergX = gx + monthW * 0.79;
+              const base = padT + chartH;
+              const done = row.counts["Done"];
+              const booked = row.counts["Booked"];
+              const failed = row.counts["Cancelled"] + row.counts["Postponed"] + row.counts["No-show"];
+              const emerg = row.emergency;
+              const doneH = (done / maxBarValue) * chartH;
+              const bookedH = (booked / maxBarValue) * chartH;
+              const failedH = (failed / maxBarValue) * chartH;
+              const emergH = (emerg / maxBarValue) * chartH;
+              return (
+                <g key={row.label}>
+                  {failed > 0 && <rect x={mainX} y={base - doneH - bookedH - failedH} width={mainW} height={failedH} fill="#fca5a5" rx={2} />}
+                  {booked > 0 && <rect x={mainX} y={base - doneH - bookedH} width={mainW} height={bookedH} fill="#93c5fd" rx={2} />}
+                  {done > 0 && <rect x={mainX} y={base - doneH} width={mainW} height={doneH} fill="#6ee7b7" rx={2} />}
+                  {emerg > 0 && <rect x={emergX} y={base - emergH} width={emergW} height={emergH} fill="#fb923c" rx={2} />}
+                  <text x={gx + monthW / 2} y={base + 17} textAnchor="middle" fontSize={9} fill="#6b7280">{format(months[i], "MMM")}</text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-gray-500">
+          <LegendDot color="#6ee7b7" label="Done" />
+          <LegendDot color="#93c5fd" label="Booked (upcoming)" />
+          <LegendDot color="#fca5a5" label="Cancelled / Postponed / No-show" />
+          <LegendDot color="#fb923c" label="Emergency" />
         </div>
       </div>
 
@@ -2803,39 +2903,35 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
           <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
             <tr>
               <th className="px-4 py-3 text-left">Month</th>
-              {statuses.map((s) => (
-                <th key={s} className="px-4 py-3 text-center">{s}</th>
-              ))}
-              <th className="px-4 py-3 text-center text-red-500">Emergency</th>
+              {statuses.map((s) => <th key={s} className="px-4 py-3 text-center">{s}</th>)}
+              <th className="px-4 py-3 text-center text-orange-500">Emergency</th>
               <th className="px-4 py-3 text-center">Total</th>
+              <th className="px-4 py-3 text-center text-emerald-600">Utilisation</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {rows.map(({ label, counts, total, emergency }) => (
+            {rows.map(({ label, counts, total, emergency, utilisation }) => (
               <tr key={label} className="print-row hover:bg-gray-50/60">
                 <td className="px-4 py-2.5 font-medium text-gray-700">{label}</td>
                 {statuses.map((s) => (
                   <td key={s} className="px-4 py-2.5 text-center">
-                    {counts[s] > 0 ? (
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[s]}`}>
-                        {counts[s]}
-                      </span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
+                    {counts[s] > 0
+                      ? <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusColors[s]}`}>{counts[s]}</span>
+                      : <span className="text-gray-300">—</span>}
                   </td>
                 ))}
                 <td className="px-4 py-2.5 text-center">
-                  {emergency > 0 ? (
-                    <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
-                      {emergency}
-                    </span>
-                  ) : (
-                    <span className="text-gray-300">—</span>
-                  )}
+                  {emergency > 0
+                    ? <span className="inline-block rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">{emergency}</span>
+                    : <span className="text-gray-300">—</span>}
                 </td>
                 <td className="px-4 py-2.5 text-center font-semibold text-gray-800">
                   {(total + emergency) > 0 ? total + emergency : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-4 py-2.5 text-center">
+                  {utilisation !== null
+                    ? <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${utilisation >= 80 ? "bg-emerald-100 text-emerald-700" : utilisation >= 60 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>{utilisation}%</span>
+                    : <span className="text-gray-300">—</span>}
                 </td>
               </tr>
             ))}
@@ -2843,15 +2939,47 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
           <tfoot className="border-t-2 border-gray-200 bg-gray-50 text-xs font-bold uppercase tracking-wide text-gray-600">
             <tr>
               <td className="px-4 py-2.5">Total</td>
-              {statuses.map((s) => (
-                <td key={s} className="px-4 py-2.5 text-center">{totals[s] || "—"}</td>
-              ))}
-              <td className="px-4 py-2.5 text-center text-red-600">{totalEmergency || "—"}</td>
+              {statuses.map((s) => <td key={s} className="px-4 py-2.5 text-center">{totals[s] || "—"}</td>)}
+              <td className="px-4 py-2.5 text-center text-orange-600">{totalEmergency || "—"}</td>
               <td className="px-4 py-2.5 text-center">{(grandTotal + totalEmergency) || "—"}</td>
+              <td className="px-4 py-2.5 text-center text-emerald-600">{utilisationPct}%</td>
             </tr>
           </tfoot>
         </table>
       </TableShell>
+
+      {/* Specialty breakdown */}
+      {specialtyRows.length > 0 && (
+        <div>
+          <h3 className="mb-3 text-sm font-semibold text-gray-700">Cases by Specialty — {year}</h3>
+          <TableShell>
+            <table className="min-w-full divide-y divide-gray-100 text-sm">
+              <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-4 py-3 text-left">Specialty</th>
+                  <th className="px-4 py-3 text-center">Done</th>
+                  <th className="px-4 py-3 text-center">Booked</th>
+                  <th className="px-4 py-3 text-center">Cancelled</th>
+                  <th className="px-4 py-3 text-center">Postponed</th>
+                  <th className="px-4 py-3 text-center">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {specialtyRows.map((r) => (
+                  <tr key={r.name} className="hover:bg-gray-50/60">
+                    <td className="px-4 py-2.5 font-medium text-gray-700">{r.name}</td>
+                    <td className="px-4 py-2.5 text-center">{r.done > 0 ? <span className="inline-block rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">{r.done}</span> : <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-center">{r.booked > 0 ? <span className="inline-block rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800">{r.booked}</span> : <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-center">{r.cancelled > 0 ? <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">{r.cancelled}</span> : <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-center">{r.postponed > 0 ? <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">{r.postponed}</span> : <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-center font-semibold text-gray-800">{r.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableShell>
+        </div>
+      )}
     </section>
   );
 }
