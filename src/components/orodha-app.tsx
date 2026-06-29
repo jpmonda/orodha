@@ -2811,7 +2811,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
         <td style="text-align:center;color:#6b7280">${ageStr(b.patient.date_of_birth)}</td>
         <td>${b.surgicalCase.procedure_name}</td>
         <td style="color:#6b7280">${format(parseISO(b.session.session_date), "d MMM yyyy")}</td>
-        <td style="color:#6b7280">${b.surgicalCase.primary_surgeon || "—"}</td>
+        <td style="color:#6b7280">${b.surgicalCase.surgeon || "—"}</td>
         <td style="text-align:center">${statusBadge(b.booking_status)}</td>
       </tr>`).join("");
 
