@@ -833,7 +833,7 @@ function OrodhaWorkspace({ appUser, onSignOut }: { appUser: AppUser; onSignOut: 
             />
           )}
           {contentView === "daily" && <TheatreListScreen data={data} bookings={bookings} selectedDate={selectedDate} setSelectedDate={setSelectedDate} />}
-          {contentView === "reports" && <ReportsScreen bookings={bookings} emergencyBookings={emergencyBookings} />}
+          {contentView === "reports" && <ReportsScreen bookings={bookings} emergencyBookings={emergencyBookings} profiles={profiles} />}
           {contentView === "users" && isAdmin && (
             <UserManagementScreen
               profiles={profiles}
@@ -2743,7 +2743,7 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
-function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBooking[]; emergencyBookings: EnrichedEmergencyBooking[] }) {
+function ReportsScreen({ bookings, emergencyBookings, profiles }: { bookings: EnrichedBooking[]; emergencyBookings: EnrichedEmergencyBooking[]; profiles: Profile[] }) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [tooltip, setTooltip] = useState<{ i: number; month: string; done: number; booked: number; emerg: number } | null>(null);
@@ -2782,7 +2782,8 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
     return months < 24 ? `${months}m` : `${Math.floor(months / 12)}y`;
   }
 
-  function printMonthReport(label: string, mb: EnrichedBooking[], me: EnrichedEmergencyBooking[]) {
+  function printMonthReport(label: string, mb: EnrichedBooking[], me: EnrichedEmergencyBooking[], surgeonProfiles: Profile[]) {
+    const profileMap = new Map(surgeonProfiles.map((p) => [p.id, p.full_name]));
     const win = window.open("", "_blank");
     if (!win) return;
     const now = format(new Date(), "d MMMM yyyy, HH:mm");
@@ -2811,7 +2812,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
         <td style="text-align:center;color:#6b7280">${ageStr(b.patient.date_of_birth)}</td>
         <td>${b.surgicalCase.procedure_name}</td>
         <td style="color:#6b7280">${format(parseISO(b.session.session_date), "d MMM yyyy")}</td>
-        <td style="color:#6b7280">${b.surgicalCase.surgeon || "—"}</td>
+        <td style="color:#6b7280">${b.surgicalCase.surgeon_id ? (profileMap.get(b.surgicalCase.surgeon_id) || "—") : "—"}</td>
         <td style="text-align:center">${statusBadge(b.booking_status)}</td>
       </tr>`).join("");
 
@@ -3055,7 +3056,7 @@ function ReportsScreen({ bookings, emergencyBookings }: { bookings: EnrichedBook
                 <td className="px-4 py-2.5 text-center no-print">
                   {(total + emergency) > 0 && (
                     <button
-                      onClick={() => printMonthReport(label, monthBookings, monthEmergency)}
+                      onClick={() => printMonthReport(label, monthBookings, monthEmergency, profiles)}
                       className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-500 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700"
                       title={`Print ${label} report`}
                     >
